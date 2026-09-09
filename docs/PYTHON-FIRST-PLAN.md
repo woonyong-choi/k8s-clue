@@ -1,20 +1,21 @@
-# k8s-ops Python 정리 계획
+# k8s-clue-python-reference Python 정리 계획
 
 ## 결정
 
-- `k8s-ops`를 먼저 고친다.
-- `k8s-ops`는 Python 행동 참조 구현으로 마무리한다.
+- `k8s-clue-python-reference`를 먼저 고친다.
+- `k8s-clue-python-reference`는 Python 행동 참조 구현으로 마무리한다.
 - Java 구현은 Python Handoff Gate 통과 후 시작한다.
 - Python에서 Hub, Fleet, 사용자 권한, 장기 운영 기능을 새로 완성하지 않는다.
 - 현재 구현 중 Java에 필요 없는 runtime은 계약 추출 후 삭제한다.
 - Python 코드를 Java로 줄 단위 번역하지 않는다.
-- 저장소 이름과 GitHub URL은 `k8s-ops`로 유지한다.
-- 제품명, CLI, package, chart, metric, 환경변수는 Kyro로 통일한다.
+- 저장소 이름과 GitHub URL은 `k8s-clue-python-reference`로 유지한다.
+- 제품 표시명과 목표 CLI는 Clue로 통일한다. 현재 package·chart와 저장·통신 식별자의 호환 경계는 [README](../README.md#명칭과-호환-범위)를 따른다.
+- 아래 새 CLI·module·prefix는 앞으로의 구현 목표다. 기존 암호화·서명·identity·metric·환경변수 계약을 명칭 치환만으로 이전하지 않는다.
 
 ## Python 저장소의 최종 결과
 
 ```text
-kyro diagnose
+clue diagnose
 → kubeconfig에서 context 확인
 → Kubernetes API read-only 조회
 → Evidence Bundle 생성
@@ -178,7 +179,7 @@ Java에 넘기지 않는 항목:
 ## 목표 디렉터리
 
 ```text
-src/kyro/
+src/clue/
 ├── cli/
 │   ├── main.py
 │   ├── commands/
@@ -232,14 +233,14 @@ handoff/
 
 | 현재 경로 | 목표 경로 | 처리 |
 |---|---|---|
-| `src/services/target/cluster-agent/evidence/collector.py` | `src/kyro/adapters/kubernetes/collector.py` | Hub lease 제거, local call 유지 |
-| `src/services/target/cluster-agent/providers/` | `src/kyro/adapters/kubernetes/` | read-only provider만 유지 |
-| `src/services/ai/agent/pipeline/causes.py` | `src/kyro/rules/` | Rule ID와 fixture 분리 |
-| `src/packages/ai/rule_catalog.py` | `src/kyro/domain/analysis/` | framework 의존 제거 |
-| `src/domains/rca/` | `src/kyro/domain/incident/`, `analysis/`, `recovery/` | ORM과 router 분리 |
-| `src/domains/gitops/source_patch.py` | `src/kyro/domain/remediation/` | allowlist 유지 |
-| `src/services/gitops/scm-worker/github_provider.py` | `src/kyro/adapters/github/` | worker wrapper 제거 |
-| `src/domains/rca/recovery_verification.py` | `src/kyro/domain/recovery/` | clock 주입 |
+| `src/services/target/cluster-agent/evidence/collector.py` | `src/clue/adapters/kubernetes/collector.py` | Hub lease 제거, local call 유지 |
+| `src/services/target/cluster-agent/providers/` | `src/clue/adapters/kubernetes/` | read-only provider만 유지 |
+| `src/services/ai/agent/pipeline/causes.py` | `src/clue/rules/` | Rule ID와 fixture 분리 |
+| `src/packages/ai/rule_catalog.py` | `src/clue/domain/analysis/` | framework 의존 제거 |
+| `src/domains/rca/` | `src/clue/domain/incident/`, `analysis/`, `recovery/` | ORM과 router 분리 |
+| `src/domains/gitops/source_patch.py` | `src/clue/domain/remediation/` | allowlist 유지 |
+| `src/services/gitops/scm-worker/github_provider.py` | `src/clue/adapters/github/` | worker wrapper 제거 |
+| `src/domains/rca/recovery_verification.py` | `src/clue/domain/recovery/` | clock 주입 |
 
 ### 계약 추출 후 삭제
 
@@ -260,7 +261,7 @@ handoff/
 | `src/domains/alert/` | 외부 alert identity | Analyzer input 문서 반영 후 |
 | `src/domains/target/` | cluster identity와 enrollment field | protocol 문서 반영 후 |
 | `alembic/`, `alembic.ini` | 최종 schema field 목록 | JSON schema 확정 후 |
-| `charts/kyro/` | read-only RBAC | `handoff/rbac` 생성 후 |
+| `charts/clue/` | read-only RBAC | `handoff/rbac` 생성 후 |
 | `src/entrypoints/app.py` | active service list | CLI entrypoint 전환 후 |
 | `src/entrypoints/bootstrap*.py` | bootstrap requirement | Python DB 제거 후 |
 
@@ -338,20 +339,20 @@ handoff/baseline/dependencies.json
 - [ ] 실패한 baseline은 실패 상태와 원인 기록
 - [ ] 삭제 전 비교 자료 확보
 
-## P1. Kyro 명칭과 CLI entrypoint
+## P1. Clue 명칭과 CLI entrypoint
 
 ### 명칭 변경
 
-- [ ] 제품 표시 `Kyro`
-- [ ] CLI `kyro`
-- [ ] Python project `kyro-reference`
-- [ ] chart directory `charts/kyro`
-- [ ] image `kyro`
-- [ ] environment prefix `KYRO_`
-- [ ] metric prefix `kyro_`
+- [x] 제품 표시 `Clue`
+- [ ] CLI `clue`
+- [x] Python project `k8s-clue-python-reference`
+- [x] chart directory `charts/clue`
+- [x] 로컬 image 이름 `clue` (원격 게시 아님)
+- [ ] 향후 environment prefix `CLUE_`: 현재 참조 구현의 `KYRO_`는 호환 유지
+- [ ] 향후 metric prefix `clue_`: 현재 참조 구현의 `kyro_`는 호환 유지
 - [ ] label/annotation prefix는 소유한 DNS 기준으로 확정
-- [ ] PostgreSQL 기본 database/user는 제거 전까지 `kyro`
-- [ ] frontend package는 삭제 전까지 `kyro-console`
+- [x] PostgreSQL 기본 database/user는 기존 설치와 호환되도록 `kyro` 유지
+- [x] frontend package `clue-console`
 - [ ] 기존 제품명 평문·파일명 검사
 
 ### CLI 생성
@@ -360,15 +361,15 @@ handoff/baseline/dependencies.json
 
 ```toml
 [project.scripts]
-kyro = "kyro.cli.main:main"
+clue = "clue.cli.main:main"
 ```
 
 명령:
 
 ```bash
-kyro version
-kyro diagnose --help
-kyro rules list
+clue version
+clue diagnose --help
+clue rules list
 ```
 
 ### exit code
@@ -384,8 +385,8 @@ kyro rules list
 
 ### 완료 조건
 
-- [ ] 저장소명 `k8s-ops` 유지
-- [ ] 제품 명칭 Kyro 통일
+- [ ] 저장소명 `k8s-clue-python-reference` 유지
+- [ ] 제품 명칭 Clue 통일
 - [ ] CLI help snapshot test
 - [ ] text/json output 계약 생성
 
@@ -407,12 +408,12 @@ kyro rules list
 ### target 선택
 
 ```bash
-kyro diagnose
-kyro diagnose --context dev
-kyro diagnose --namespace payments
-kyro diagnose deployment/card-api
-kyro diagnose pod/card-api-abc
-kyro diagnose --all-contexts
+clue diagnose
+clue diagnose --context dev
+clue diagnose --namespace payments
+clue diagnose deployment/card-api
+clue diagnose pod/card-api-abc
+clue diagnose --all-contexts
 ```
 
 ### 보안 조건
@@ -426,10 +427,10 @@ kyro diagnose --all-contexts
 ### 첫 Analyzer
 
 ```text
-KYRO-IMAGE-001 IMAGE_TAG_NOT_FOUND
-KYRO-IMAGE-002 IMAGE_PULL_UNAUTHORIZED
-KYRO-IMAGE-003 REGISTRY_UNAVAILABLE
-KYRO-IMAGE-099 INSUFFICIENT_IMAGE_EVIDENCE
+CLUE-IMAGE-001 IMAGE_TAG_NOT_FOUND
+CLUE-IMAGE-002 IMAGE_PULL_UNAUTHORIZED
+CLUE-IMAGE-003 REGISTRY_UNAVAILABLE
+CLUE-IMAGE-099 INSUFFICIENT_IMAGE_EVIDENCE
 ```
 
 ### 완료 조건
@@ -643,13 +644,13 @@ make handoff-verify
 
 ```text
 tag: python-handoff-v1
-artifact: kyro-python-handoff-v1.tar.gz
+artifact: clue-python-handoff-v1.tar.gz
 checksum: SHA-256
 ```
 
 ## Handoff Gate
 
-- [ ] `kyro diagnose`가 외부 service 없이 실행된다.
+- [ ] `clue diagnose`가 외부 service 없이 실행된다.
 - [ ] P0 Analyzer fixture가 모두 통과한다.
 - [ ] schema가 versioned 상태다.
 - [ ] expected result가 canonical JSON이다.
@@ -753,8 +754,8 @@ gateway API E2E
 완료 상태:
 
 ```text
-k8s-ops = 실행 가능한 Python Kyro 명세
-Kyro = Java 포팅 대기
+k8s-clue-python-reference = 실행 가능한 Python Clue 명세
+Clue = Java 포팅 대기
 ```
 
 Java 작업 시작 조건:

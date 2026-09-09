@@ -1,10 +1,10 @@
-{{- if eq (include "kyro.accessMode" . | trim) "ingress" }}
+{{- if eq (include "clue.accessMode" . | trim) "ingress" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "kyro.fullname" . }}
+  name: {{ include "clue.fullname" . }}
   labels:
-    {{- include "kyro.labels" . | nindent 4 }}
+    {{- include "clue.labels" . | nindent 4 }}
   {{- with .Values.access.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -27,7 +27,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "kyro.fullname" . }}
+                name: {{ include "clue.fullname" . }}
                 port:
                   name: http
 {{- end }}

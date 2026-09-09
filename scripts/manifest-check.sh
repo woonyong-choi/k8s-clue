@@ -5,11 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-RENDERED_MANIFEST="${TMP_DIR}/kyro.yaml"
+RENDERED_MANIFEST="${TMP_DIR}/clue.yaml"
 
-helm lint "${ROOT_DIR}/charts/kyro"
-helm template kyro "${ROOT_DIR}/charts/kyro" \
-  --namespace kyro-system \
+helm lint "${ROOT_DIR}/charts/clue"
+helm template clue "${ROOT_DIR}/charts/clue" \
+  --namespace clue-system \
   --set image.tag=local \
   --set console.image.tag=local \
   --set postgresql.auth.password=manifest-check \

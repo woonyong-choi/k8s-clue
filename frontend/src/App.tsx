@@ -14,9 +14,9 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Kubernetes GitOps 홈">
-          <span className="brand-mark" aria-hidden="true">K</span>
-          <span>Kubernetes GitOps</span>
+        <a className="brand" href="/" aria-label="Clue 홈">
+          <span className="brand-mark" aria-hidden="true">C</span>
+          <span>Clue</span>
         </a>
         <nav aria-label="주요 메뉴">
           <a href="/" aria-current={route.kind === "overview" ? "page" : undefined}>Golden Path</a>
@@ -26,7 +26,7 @@ export function App() {
           >
             Incidents
           </a>
-          <a href="https://github.com/woonyong-kr/k8s-ops">GitHub</a>
+          <a href="https://github.com/woonyong-kr/k8s-clue-python-reference">GitHub</a>
         </nav>
       </header>
       <main>
@@ -35,7 +35,7 @@ export function App() {
         </Suspense>
       </main>
       <footer>
-        <strong>Kubernetes GitOps</strong>
+        <strong>Clue</strong>
         <span>{PRODUCT_DESCRIPTION}</span>
       </footer>
     </div>

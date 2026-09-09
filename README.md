@@ -1,4 +1,6 @@
-# Kubernetes 장애 증거 기반 GitOps 변경 제안 도구
+# Clue Python Reference
+
+Kubernetes 장애 증거 기반 GitOps 변경 제안 도구
 
 ## 한눈에
 
@@ -12,7 +14,7 @@
 | 한계 | 실사용 트래픽 없음. 외부 클러스터 E2E 미수행. 완결 시나리오는 ImagePullBackOff 1개 |
 
 **같은 사람의 다른 저장소** · 이력서 허브: <https://woonyong-kr.github.io>
-[Kyro(k8s-ops)](https://github.com/woonyong-kr/k8s-ops) · [MiniDB](https://github.com/woonyong-kr/minidb) · [PintOS](https://github.com/woonyong-kr/pintos) · [dx_framework](https://github.com/woonyong-kr/dx_framework)
+[Clue 제품](https://github.com/woonyong-kr/clue) · [Python Reference](https://github.com/woonyong-kr/k8s-clue-python-reference) · [MiniDB](https://github.com/woonyong-kr/minidb) · [PintOS](https://github.com/woonyong-kr/pintos) · [dx_framework](https://github.com/woonyong-kr/dx_framework)
 
 
 Kubernetes 장애 당시의 증거를 보존하고, 규칙으로 원인을 판정한 뒤 허용된 manifest 변경만 GitHub Draft PR로 제안하고 배포 이후 상태를 다시 검증한다.
@@ -64,8 +66,8 @@ ImagePullBackOff
 - Helm
 
 ```bash
-git clone https://github.com/woonyong-kr/k8s-ops.git
-cd k8s-ops
+git clone https://github.com/woonyong-kr/k8s-clue-python-reference.git
+cd k8s-clue-python-reference
 uv sync --all-groups
 cd frontend
 npm ci
@@ -73,6 +75,14 @@ cd ..
 ```
 
 Docker, kubectl과 kind는 이미지·manifest·로컬 클러스터 검증을 수행할 때만 필요하다.
+
+### 명칭과 호환 범위
+
+- 제품 표시명은 `Clue`, 이 참조 저장소와 Python project는 `k8s-clue-python-reference`, frontend package는 `clue-console`, Helm chart는 `charts/clue`다.
+- `clue diagnose` 등 새 CLI는 [Python 선행 정리 계획](docs/PYTHON-FIRST-PLAN.md)의 목표이며, 이번 명칭 변경으로 구현된 명령이 아니다. 현재 실행 방법은 아래 Make 명령을 사용한다.
+- 기존 암호문·cursor 서명·사용자 ID, event·metric·annotation·header·환경변수의 `kyro`/`KYRO` 식별자와 DB·기본 bootstrap identity는 호환을 위해 유지한다. 제품 표시명이 아니라 기존 저장·통신 계약이다. Alembic baseline·migration의 과거 바이트도 변경하지 않는다.
+- chart 명칭 변경은 실행 중인 Helm release, 기존 리소스·PVC·DB를 자동 이전하지 않는다. 기존 설치에 바로 덮어쓰지 말고 별도로 이전 범위를 확인해야 한다.
+- 기본 이미지 이름은 로컬 빌드용 `clue`와 `clue-console`이다. 원격 이미지 게시·서비스 배포는 이 변경에 포함되지 않는다.
 
 ## 사용법
 

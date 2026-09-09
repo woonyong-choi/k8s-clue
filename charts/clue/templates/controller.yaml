@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "kyro.fullname" . }}-controller
+  name: {{ include "clue.fullname" . }}-controller
   labels:
-    {{- include "kyro.labels" . | nindent 4 }}
+    {{- include "clue.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 spec:
   replicas: {{ .Values.controller.replicas }}
@@ -11,7 +11,7 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "kyro.selectorLabels" . | nindent 6 }}
+      {{- include "clue.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: controller
   template:
     metadata:
@@ -21,7 +21,7 @@ spec:
         kyro.io/scm-credential-version: {{ . | quote }}
         {{- end }}
       labels:
-        {{- include "kyro.selectorLabels" . | nindent 8 }}
+        {{- include "clue.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controller
     spec:
       securityContext:
@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: wait-for-database
-          image: {{ include "kyro.image" . | quote }}
+          image: {{ include "clue.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - python
@@ -61,10 +61,10 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: DATABASE_URL
         - name: bootstrap
-          image: {{ include "kyro.image" . | quote }}
+          image: {{ include "clue.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "src/entrypoints/bootstrap.py"]
           securityContext:
@@ -75,28 +75,28 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: DATABASE_URL
             - name: AUTH_EMAIL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: AUTH_EMAIL
             - name: AUTH_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: AUTH_PASSWORD
             - name: OSS_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: AGENT_TOKEN
             - name: OSS_AGENT_CLUSTER_ID
               value: {{ .Values.agent.clusterId | quote }}
       containers:
         - name: controller
-          image: {{ include "kyro.image" . | quote }}
+          image: {{ include "clue.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "src/entrypoints/app.py"]
           securityContext:
@@ -107,14 +107,14 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: DATABASE_URL
             - name: DATABASE_STARTUP_MODE
               value: initialize
             - name: FILTER_CURSOR_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: FILTER_CURSOR_SIGNING_KEY
             - name: CONTROLLER_EVENT_BUS_MODE
               value: inprocess
@@ -123,13 +123,13 @@ spec:
             - name: CONSOLE_ORIGIN
               value: http://127.0.0.1:8080
             - name: PUBLIC_MANAGEMENT_BASE_URL
-              value: {{ include "kyro.managementBaseUrl" . | trim | quote }}
+              value: {{ include "clue.managementBaseUrl" . | trim | quote }}
             - name: KYRO_ACCESS_MODE
-              value: {{ include "kyro.accessMode" . | trim | quote }}
+              value: {{ include "clue.accessMode" . | trim | quote }}
             - name: KYRO_EXTERNAL_URL
-              value: {{ include "kyro.externalUrl" . | trim | quote }}
+              value: {{ include "clue.externalUrl" . | trim | quote }}
             - name: TARGET_AGENT_IMAGE
-              value: {{ include "kyro.image" . | quote }}
+              value: {{ include "clue.image" . | quote }}
             - name: SCM_PROVIDER
               value: {{ .Values.scm.provider | quote }}
             - name: SCM_REPO
@@ -148,7 +148,7 @@ spec:
                   key: {{ $.Values.scm.github.tokenSecretKey | quote }}
             {{- end }}
             - name: COOKIE_SECURE
-              value: {{ include "kyro.cookieSecure" . | trim | quote }}
+              value: {{ include "clue.cookieSecure" . | trim | quote }}
             - name: LLM_PROVIDER
               value: {{ .Values.llm.provider | quote }}
             - name: LLM_MODEL
@@ -156,7 +156,7 @@ spec:
             - name: LLM_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: LLM_API_KEY
           ports:
             - name: http
@@ -184,7 +184,7 @@ spec:
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
         - name: console
-          image: {{ include "kyro.consoleImage" . | quote }}
+          image: {{ include "clue.consoleImage" . | quote }}
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -212,6 +212,6 @@ spec:
       volumes:
         - name: console-config
           configMap:
-            name: {{ include "kyro.fullname" . }}-console
+            name: {{ include "clue.fullname" . }}-console
         - name: console-tmp
           emptyDir: {}

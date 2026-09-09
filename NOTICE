@@ -1,5 +1,5 @@
-Kyro
-Copyright 2026 Kyro contributors
+Clue
+Copyright 2026 Clue contributors
 
 This product includes software substantially modified and rewritten from
 Radar, a Kubernetes visibility project developed by Skyhook.
@@ -11,15 +11,15 @@ Source: https://github.com/skyhook-io/radar
 Source revision: cf643dfee93a5ae8dfcd3c2a982620b793b2b4cc
 
 The upstream source and revision are identified above. The Apache License text
-is available at the repository root as LICENSE-APACHE-2.0.txt. Kyro adaptations are substantially
-modified and rewritten for Kyro's architecture, interaction model, and design
+is available at the repository root as LICENSE-APACHE-2.0.txt. Clue adaptations are substantially
+modified and rewritten for Clue's architecture, interaction model, and design
 system; no endorsement by Skyhook is implied.
 
 Provider names and logos
 ------------------------
 
 The AWS, Microsoft Azure, and Google Cloud names and logos included in the
-upstream provider-logo assets are trademarks of their respective owners. Kyro
+upstream provider-logo assets are trademarks of their respective owners. Clue
 uses them solely to identify the provider selected by a user (nominative use).
 Their inclusion does not imply sponsorship, affiliation, or endorsement.
 

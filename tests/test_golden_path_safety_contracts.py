@@ -55,7 +55,7 @@ def test_agent_kubernetes_surface_is_read_only() -> None:
     provider = source(
         "src/services/target/cluster-agent/providers/kubernetes_providers.py"
     )
-    rbac = source("charts/kyro/templates/agent-rbac.yaml")
+    rbac = source("charts/clue/templates/agent-rbac.yaml")
 
     assert not any(
         token in provider

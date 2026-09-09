@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NATS_IMAGE="${NATS_EQUIVALENCE_IMAGE:-nats:2.10-alpine}"
-CONTAINER_NAME="kyro-event-bus-equivalence-$$"
+CONTAINER_NAME="clue-event-bus-equivalence-$$"
 
 cleanup() {
   docker rm --force "${CONTAINER_NAME}" >/dev/null 2>&1 || true

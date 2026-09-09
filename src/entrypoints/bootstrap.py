@@ -43,7 +43,7 @@ def bootstrap() -> None:
             "workspace_id": DEFAULT_WORKSPACE_ID,
             "user_id": user_id,
             "cluster_id": cluster_id,
-            "name": "Kyro self cluster",
+            "name": "Clue self cluster",
             "environment": "oss",
             "status": "registered",
             "agent_token_hash": hash_agent_token(agent_token),

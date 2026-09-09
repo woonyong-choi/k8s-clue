@@ -1,5 +1,5 @@
 [project]
-name = "kyro-control-plane"
+name = "k8s-clue-python-reference"
 version = "0.1.0"
 description = "Kubernetes evidence, deterministic RCA, bounded GitOps Draft PRs, and post-deploy verification"
 readme = "README.md"

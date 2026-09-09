@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "kyro.fullname" . }}-agent
+  name: {{ include "clue.fullname" . }}-agent
   labels:
-    {{- include "kyro.labels" . | nindent 4 }}
+    {{- include "clue.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent
 spec:
   selector:
     matchLabels:
-      {{- include "kyro.selectorLabels" . | nindent 6 }}
+      {{- include "clue.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: agent
   template:
     metadata:
       labels:
-        {{- include "kyro.selectorLabels" . | nindent 8 }}
+        {{- include "clue.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: agent
     spec:
-      serviceAccountName: {{ include "kyro.fullname" . }}-agent
+      serviceAccountName: {{ include "clue.fullname" . }}-agent
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: {{ include "kyro.image" . | quote }}
+          image: {{ include "clue.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["python", "src/services/target/cluster-agent/app.py"]
           securityContext:
@@ -34,11 +34,11 @@ spec:
               drop: ["ALL"]
           env:
             - name: MANAGEMENT_BASE_URL
-              value: http://{{ include "kyro.fullname" . }}.{{ .Release.Namespace }}.svc/api
+              value: http://{{ include "clue.fullname" . }}.{{ .Release.Namespace }}.svc/api
             - name: AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kyro.fullname" . }}-bootstrap
+                  name: {{ include "clue.fullname" . }}-bootstrap
                   key: AGENT_TOKEN
             - name: TARGET_CLUSTER_ID
               value: {{ .Values.agent.clusterId | quote }}

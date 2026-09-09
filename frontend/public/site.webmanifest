@@ -1,6 +1,6 @@
 {
-  "name": "Kyro",
-  "short_name": "Kyro",
+  "name": "Clue",
+  "short_name": "Clue",
   "description": "Evidence-preserving Kubernetes recovery control plane.",
   "start_url": "/",
   "display": "standalone",

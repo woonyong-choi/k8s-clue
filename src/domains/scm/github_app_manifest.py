@@ -28,7 +28,7 @@ from packages.security.credentials import decrypt_credential, encrypt_credential
 APP_CONFIG_PROVIDER = "github-app"
 APP_CONFIG_SCOPE = "platform"
 
-_DEFAULT_APP_NAME = "Kyro GitOps"
+_DEFAULT_APP_NAME = "Clue GitOps"
 _HTTP_TIMEOUT = 20.0
 
 

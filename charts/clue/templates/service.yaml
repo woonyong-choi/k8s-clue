@@ -1,20 +1,20 @@
-{{- include "kyro.validateAccess" . -}}
-{{- $accessMode := include "kyro.accessMode" . | trim -}}
+{{- include "clue.validateAccess" . -}}
+{{- $accessMode := include "clue.accessMode" . | trim -}}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "kyro.fullname" . }}
+  name: {{ include "clue.fullname" . }}
   labels:
-    {{- include "kyro.labels" . | nindent 4 }}
+    {{- include "clue.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
   {{- if and (eq $accessMode "loadbalancer") .Values.access.loadBalancer.annotations }}
   annotations:
     {{- toYaml .Values.access.loadBalancer.annotations | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ include "kyro.serviceType" . | trim }}
+  type: {{ include "clue.serviceType" . | trim }}
   selector:
-    {{- include "kyro.selectorLabels" . | nindent 4 }}
+    {{- include "clue.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: controller
   ports:
     - name: http
@@ -27,14 +27,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "kyro.fullname" . }}-metrics
+  name: {{ include "clue.fullname" . }}-metrics
   labels:
-    {{- include "kyro.labels" . | nindent 4 }}
+    {{- include "clue.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
 spec:
   type: ClusterIP
   selector:
-    {{- include "kyro.selectorLabels" . | nindent 4 }}
+    {{- include "clue.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: controller
   ports:
     - name: metrics

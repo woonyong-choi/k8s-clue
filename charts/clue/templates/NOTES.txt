@@ -1,18 +1,18 @@
-{{- $mode := include "kyro.accessMode" . | trim -}}
-{{- $externalUrl := include "kyro.externalUrl" . | trim -}}
-Kyro is installed with access mode: {{ $mode }}
+{{- $mode := include "clue.accessMode" . | trim -}}
+{{- $externalUrl := include "clue.externalUrl" . | trim -}}
+Clue is installed with access mode: {{ $mode }}
 
 {{- if eq $mode "portforward" }}
 Open a local connection:
-  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "kyro.fullname" . }} 8080:{{ .Values.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "clue.fullname" . }} 8080:{{ .Values.service.port }}
   http://127.0.0.1:8080
 
 Agent enrollment is limited to the self cluster only while no external URL is configured.
-The self-cluster server address is {{ include "kyro.internalUrl" . | trim }}.
-To connect another cluster, expose Kyro with ingress or a load balancer and set access.externalUrl.
+The self-cluster server address is {{ include "clue.internalUrl" . | trim }}.
+To connect another cluster, expose Clue with ingress or a load balancer and set access.externalUrl.
 {{- else if eq $mode "loadbalancer" }}
 Wait for the load balancer address:
-  kubectl get service {{ include "kyro.fullname" . }} -n {{ .Release.Namespace }} --watch
+  kubectl get service {{ include "clue.fullname" . }} -n {{ .Release.Namespace }} --watch
 {{- if $externalUrl }}
 Open {{ $externalUrl }}
 {{- if eq .Values.access.loadBalancer.tlsTermination "external" }}
@@ -34,8 +34,8 @@ Set access.externalUrl before enrolling another cluster.
 {{- end }}
 
 Initial administrator email:
-  kubectl -n {{ .Release.Namespace }} get secret {{ include "kyro.fullname" . }}-bootstrap -o jsonpath='{.data.AUTH_EMAIL}' | base64 -d; echo
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "clue.fullname" . }}-bootstrap -o jsonpath='{.data.AUTH_EMAIL}' | base64 -d; echo
 Initial administrator password:
-  kubectl -n {{ .Release.Namespace }} get secret {{ include "kyro.fullname" . }}-bootstrap -o jsonpath='{.data.AUTH_PASSWORD}' | base64 -d; echo
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "clue.fullname" . }}-bootstrap -o jsonpath='{.data.AUTH_PASSWORD}' | base64 -d; echo
 
 DEV_AUTH_BYPASS is fixed to 0 in this profile.

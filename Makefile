@@ -2,7 +2,7 @@ SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-IMAGE_NAME ?= kyro:local
+IMAGE_NAME ?= clue:local
 ENV_TEMPLATE ?= config/env/app.env.example
 
 export IMAGE_NAME

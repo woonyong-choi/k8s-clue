@@ -37,7 +37,7 @@ WebSocket gateway와 대형 dashboard route는 없습니다.
 | `src/services/gitops/scm-worker` | pinned-base GitHub Draft PR 생성 |
 | `src/domains/rca`, `src/domains/scm`, `src/domains/gitops` | evidence/RCA/PR/verification 영속 계약 |
 | `frontend/src` | 3-route incident UI |
-| `charts/kyro` | 최소 runtime 설치와 read-only RBAC |
+| `charts/clue` | 최소 runtime 설치와 read-only RBAC |
 | `deploy/kind` | 선택적인 로컬 Kubernetes fixture |
 | `tests` | 결정론적 RCA, GitOps authority, PR lifecycle, 재검증 계약 |
 
