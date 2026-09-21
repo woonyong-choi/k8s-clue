@@ -52,7 +52,7 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 - [Golden Path 안전 계약](docs/GOLDEN-PATH.md)
 - [Python 선행 정리 계획 (Java 인수 조건)](docs/PYTHON-FIRST-PLAN.md)
 - [Project Map — runtime·route·디렉터리 책임](docs/PROJECT-MAP.md)
-- [Clue 제품 설계 저장소](https://github.com/woonyong-choi/clue) *(비공개)*
+- Clue 제품 설계 저장소 — `woonyong-choi/clue` (코드 없는 설계 문서, **비공개**)
 - [CI 실행 기록](https://github.com/woonyong-choi/k8s-clue-python-reference/actions)
 
 ## 담당
