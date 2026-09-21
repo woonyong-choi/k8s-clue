@@ -14,7 +14,7 @@ fact → evidence JSON 역산은 services/ai/agent/causes/signals.py 의 collect
 - log_pattern:P        → logs.entries[].line 에 P 포함
 - event_pattern:P      → kubernetes.events[].message 에 P 포함
 
-실행: cd /tmp/k8s-clue-python-reference && PYTHONPATH=src python3 evals/build_golden_set.py
+실행: cd /tmp/k8s-clue && PYTHONPATH=src python3 evals/build_golden_set.py
 출력: evals/golden_set.json
 """
 

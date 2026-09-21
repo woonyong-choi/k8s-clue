@@ -1,5 +1,5 @@
 [project]
-name = "k8s-clue-python-reference"
+name = "k8s-clue"
 version = "0.1.0"
 description = "Kubernetes evidence, deterministic RCA, bounded GitOps Draft PRs, and post-deploy verification"
 readme = "README.md"

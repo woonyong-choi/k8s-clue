@@ -1,4 +1,4 @@
-# 🔎 k8s-clue-python-reference — Kubernetes 장애 증거 → 안전한 복구 제안
+# 🔎 k8s-clue — Kubernetes 장애 증거 → 안전한 복구 제안
 
 Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판정한 뒤, **허용된 GitOps 변경만 사람이 승인하는 GitHub Draft PR로 제안**하는 Python 참조 구현입니다. 자동 복구가 아니라 "사람이 승인하기 직전까지"를 안전하게 자동화하려고 만들었습니다.
 
@@ -18,7 +18,8 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 |---|---|---|
 | 완결 보장 시나리오 | 여러 경로가 부분 구현 | ImagePullBackOff **1개를 계약 테스트로 고정** |
 | `make demo` | 실행 실패 (없는 파일 참조) | **86개 계약 테스트 통과** |
-| 전체 테스트 | — | **205개 통과** |
+| 전체 테스트 | — | **284개 통과** |
+| 운영 데이터 계층 | 별도 저장소(`k8s-ops-min`)에 분산 | **정본에 흡수** — 카탈로그 79개 통과 |
 
 ## 구동모습
 
@@ -38,6 +39,9 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 - **배포 후 회복 검증** — 변경 전 기준선과 새 evidence window를 비교해 실제로 회복됐는지 판정합니다. → [`recovery_verification.py`](src/domains/rca/recovery_verification.py)
 - **correlation / causation 전파** — worker가 만드는 자식 이벤트가 부모의 correlation·causation id를 물려받아 사건 단위로 추적됩니다. → [`test_golden_path_safety_contracts.py`](tests/test_golden_path_safety_contracts.py)
 - **event bus 모드 동등성** — in-process와 NATS 두 모드의 결과가 같은지 별도 스크립트로 검사합니다. → `make event-bus-equivalence`
+- **수집 완전성 계약** — 수집 결과를 completed / partial / unavailable 과 사유로 나눠 넘겨, 빈 결과를 "이상 없음"으로 오인하지 않게 합니다. → [`inventory/coverage.py`](src/domains/inventory/coverage.py)
+- **운영 데이터 카탈로그** — 자산·스키마 계약·리니지·실행 단위를 PostgreSQL 에 적재하고, 조회 응답마다 그 결과가 부분 데이터인지(`run_status`) 함께 돌려줍니다. → [`domains/datacatalog/`](src/domains/datacatalog/)
+- **고장 입력으로 검증하는 품질 SQL** — 신선도·스키마 드리프트·중복·리니지 단절을 정상 입력뿐 아니라 실제로 검출해야 할 고장 입력으로 확인합니다. → [`sql/checks/`](sql/checks/)
 
 ## 계획
 
@@ -50,10 +54,11 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 ## 링크
 
 - [Golden Path 안전 계약](docs/GOLDEN-PATH.md)
+- [수집 완전성 계약](docs/collection-contract.md) · [메타데이터 카탈로그](docs/metadata-catalog.md) · [품질 검사 SQL](docs/sql-quality-checks.md) · [카탈로그 조회 API](docs/catalog-api.md)
 - [Python 선행 정리 계획 (Java 인수 조건)](docs/PYTHON-FIRST-PLAN.md)
 - [Project Map — runtime·route·디렉터리 책임](docs/PROJECT-MAP.md)
 - Clue 제품 설계 저장소 — `woonyong-choi/clue` (코드 없는 설계 문서, **비공개**)
-- [CI 실행 기록](https://github.com/woonyong-choi/k8s-clue-python-reference/actions)
+- [CI 실행 기록](https://github.com/woonyong-choi/k8s-clue/actions)
 
 ## 담당
 
@@ -70,25 +75,35 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 
 ### 개인 확장 (팀 과제 종료 후)
 
-**커밋 범위: [`b749f3b`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/b749f3b) (2026-08-04) ~ [`2e02605`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/2e02605) (2026-09-11).** 기록된 팀 기준선은 [`b749f3b`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/b749f3b)(첫 커밋)부터 [`e1a9c79`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/e1a9c79)(2026-08-17, 마지막 확인 커밋)까지이며, 그 이후가 종료 후 개인 작업입니다.[^authors]
+**커밋 범위: [`b749f3b`](https://github.com/woonyong-choi/k8s-clue/commit/b749f3b) (2026-08-04) ~ [`2e02605`](https://github.com/woonyong-choi/k8s-clue/commit/2e02605) (2026-09-11).** 기록된 팀 기준선은 [`b749f3b`](https://github.com/woonyong-choi/k8s-clue/commit/b749f3b)(첫 커밋)부터 [`e1a9c79`](https://github.com/woonyong-choi/k8s-clue/commit/e1a9c79)(2026-08-17, 마지막 확인 커밋)까지이며, 그 이후가 종료 후 개인 작업입니다.[^authors]
 
 | 무엇이 달라졌나 | 커밋 |
 |---|---|
-| requirements 재현성 고정, OpenTelemetry 정렬, CI 게이트 도입 | [`e1a9c79`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/e1a9c79) |
-| event bus 모드(in-process / NATS) 검증과 생성을 분리 | [`a8219c3`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/a8219c3) |
-| 제품명 전환에 맞춘 식별자 정리 (Opsia → Kyro → Clue), 저장·통신 호환 식별자는 유지 | [`ff2e8c9`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/ff2e8c9), [`778e1e8`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/778e1e8) |
-| Golden Path로 범위를 좁히고 권한·실패·복구 경계를 감사 | [`c9233d3`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/c9233d3), [`2e02605`](https://github.com/woonyong-choi/k8s-clue-python-reference/commit/2e02605) |
+| requirements 재현성 고정, OpenTelemetry 정렬, CI 게이트 도입 | [`e1a9c79`](https://github.com/woonyong-choi/k8s-clue/commit/e1a9c79) |
+| event bus 모드(in-process / NATS) 검증과 생성을 분리 | [`a8219c3`](https://github.com/woonyong-choi/k8s-clue/commit/a8219c3) |
+| 제품명 전환에 맞춘 식별자 정리 (Opsia → Kyro → Clue), 저장·통신 호환 식별자는 유지 | [`ff2e8c9`](https://github.com/woonyong-choi/k8s-clue/commit/ff2e8c9), [`778e1e8`](https://github.com/woonyong-choi/k8s-clue/commit/778e1e8) |
+| Golden Path로 범위를 좁히고 권한·실패·복구 경계를 감사 | [`c9233d3`](https://github.com/woonyong-choi/k8s-clue/commit/c9233d3), [`2e02605`](https://github.com/woonyong-choi/k8s-clue/commit/2e02605) |
 | **`make demo` 복구** — 없는 `tests/test_incident_alert_event.py`를 가리켜 실행 실패하던 것을 실제 Golden Path 계약 테스트로 교체 | 이번 정리 |
+| **운영 데이터 카탈로그 흡수** — `k8s-ops-min` 의 수집 완전성 계약·카탈로그·품질 SQL·조회 API 를 정본으로 합치고, 미검증 MCP 는 제외 | 이번 정리 |
 
 ## 구동방법
 
 Python 3.13과 [uv](https://docs.astral.sh/uv/getting-started/installation/)가 필요합니다.
 
 ```bash
-git clone https://github.com/woonyong-choi/k8s-clue-python-reference.git
-cd k8s-clue-python-reference
+git clone https://github.com/woonyong-choi/k8s-clue.git
+cd k8s-clue
 uv sync --all-groups
 make demo
+```
+
+운영 데이터 카탈로그 계층은 PostgreSQL 하나만 필요합니다.
+
+```bash
+make catalog-up      # PostgreSQL 기동 (healthy 까지 대기)
+make catalog-schema  # 카탈로그 테이블 생성
+make catalog-test    # 카탈로그 계층 79개
+make catalog-down    # 종료 (볼륨까지 제거)
 ```
 
 ```bash
@@ -109,28 +124,32 @@ Docker·kubectl·kind는 이미지·클러스터 검증에 씁니다. 전체 도
 | 패키지·잠금 | uv (`uv.lock`), ruff (lint·format), pytest |
 | 백엔드 주요 라이브러리 | FastAPI + Uvicorn, SQLAlchemy 2.0 + Alembic, OpenTelemetry(API·SDK·OTLP), psycopg 3, PyJWT, cryptography |
 | 메시징 | in-process event bus / NATS (`nats-py`, 두 모드 동등성 검사) |
-| 저장소 | PostgreSQL (outbox·ledger·DLQ), Redis |
+| 저장소 | PostgreSQL (outbox·ledger·DLQ, 운영 데이터 카탈로그), Redis |
+| 데이터 계층 | 카탈로그 배치 DAG(Airflow 계약), 품질 검사 SQL 8종 + 조회 2종 |
 | 프론트엔드 | `clue-console` — React 19, Vite, TypeScript, Vitest (Node.js 22) |
 | 배포 | Helm chart [`charts/clue`](charts/clue/), 컨테이너 이미지 |
 | 라이선스 | Apache-2.0 ([`NOTICE`](NOTICE) — upstream Radar에서 상당 부분 재작성) |
 
 ## 검증
 
-[![CI](https://github.com/woonyong-choi/k8s-clue-python-reference/actions/workflows/ci.yml/badge.svg)](https://github.com/woonyong-choi/k8s-clue-python-reference/actions/workflows/ci.yml)
+[![CI](https://github.com/woonyong-choi/k8s-clue/actions/workflows/ci.yml/badge.svg)](https://github.com/woonyong-choi/k8s-clue/actions/workflows/ci.yml)
 
-**전체 205개 테스트 통과**, **`make demo` 계약 86개 통과**입니다(2026-09-22 로컬 재실행).[^tests]
+**전체 284개 테스트 통과**, **`make demo` 계약 86개 통과**입니다(2026-09-22 로컬 재실행).[^tests]
 
 | 검사 | 결과 | 명령 |
 |---|---:|---|
-| 전체 pytest | **205 passed** | `make test` |
+| 전체 pytest (PostgreSQL 기동 시) | **284 passed** | `make catalog-up && make test` |
+| 전체 pytest (DB 없이 — 카탈로그 36개 skip) | 248 passed, 36 skipped | `make test` |
 | demo — ImagePullBackOff 증거·RCA | 30 passed | `make demo` |
 | demo — base SHA 고정 Draft PR | 29 passed | `make demo` |
 | demo — 배포 후 증거 검증 | 27 passed | `make demo` |
+| 카탈로그 계층 | **79 passed** | `make catalog-test` |
 | ruff lint | 통과 | `make test` |
 | requirements 재현성 (lock ↔ requirements.txt) | 일치 | `make test` |
 
 ```bash
-make test                     # 205개 테스트 + lint + lock 일치 검사
+make catalog-up               # 카탈로그 검사에 필요한 PostgreSQL
+make test                     # 284개 테스트 + lint + lock 일치 검사
 make demo                     # Golden Path 계약 86개
 make gate-backend             # CI backend job과 동일 (test + manifest-check)
 make event-bus-equivalence    # in-process ↔ NATS 결과 동등성
@@ -153,4 +172,4 @@ CI는 backend(`make gate-backend`)와 frontend(`npm run check`) 두 job으로 �
 - [GitHub REST API — Pulls](https://docs.github.com/en/rest/pulls/pulls)
 
 [^authors]: `git log --author='woonyong' --reverse --format='%h %ad %s' --date=short`. 팀 기준선 `b749f3b`~`e1a9c79`는 프로젝트 기록 기준입니다.
-[^tests]: `make test`의 pytest 합계와 `make demo`의 장면별 pytest 합계(30+29+27).
+[^tests]: `make test`의 pytest 합계와 `make demo`의 장면별 pytest 합계(30+29+27). 284는 `make catalog-up` 으로 PostgreSQL 을 띄운 상태의 수이며, DB 없이는 카탈로그 36개가 skip 되어 248이 됩니다.

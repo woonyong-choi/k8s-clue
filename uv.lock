@@ -532,7 +532,7 @@ wheels = [
 ]
 
 [[package]]
-name = "k8s-clue-python-reference"
+name = "k8s-clue"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

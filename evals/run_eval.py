@@ -1,7 +1,7 @@
 """골든셋 시나리오를 실제 엔진(plan_causes → evaluate_causes → analyze_root_cause)에
 통과시켜 accuracy / coverage / false positive 를 실측한다.
 
-실행: cd /tmp/k8s-clue-python-reference && PYTHONPATH=src python3 evals/run_eval.py
+실행: cd /tmp/k8s-clue && PYTHONPATH=src python3 evals/run_eval.py
 입력: evals/golden_set.json (build_golden_set.py 산출물)
 출력: evals/results.json, evals/results.md
 """
