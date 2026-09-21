@@ -1,4 +1,4 @@
-# 🔎 k8s-clue — Kubernetes 장애 증거 → 안전한 복구 제안
+# k8s-clue — Kubernetes 장애 증거 → 안전한 복구 제안
 
 Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판정한 뒤, **허용된 GitOps 변경만 사람이 승인하는 GitHub Draft PR로 제안**하는 Python 참조 구현입니다. 자동 복구가 아니라 "사람이 승인하기 직전까지"를 안전하게 자동화하려고 만들었습니다.
 
