@@ -42,3 +42,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --include=dev --no-audit --no-fund
       - run: npm run check
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Lint workflow files
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
