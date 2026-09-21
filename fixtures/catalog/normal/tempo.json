@@ -1,0 +1,44 @@
+[
+  {
+    "asset_id": "tempo.trace",
+    "row_key": "tempo-0",
+    "cluster_id": "local",
+    "payload": {
+      "name": "tempo-0",
+      "namespace": "prod",
+      "replicas": 1,
+      "labels": {
+        "app": "svc-0"
+      },
+      "observed": true
+    }
+  },
+  {
+    "asset_id": "tempo.trace",
+    "row_key": "tempo-1",
+    "cluster_id": "local",
+    "payload": {
+      "name": "tempo-1",
+      "namespace": "prod",
+      "replicas": 2,
+      "labels": {
+        "app": "svc-1"
+      },
+      "observed": true
+    }
+  },
+  {
+    "asset_id": "tempo.trace",
+    "row_key": "tempo-2",
+    "cluster_id": "local",
+    "payload": {
+      "name": "tempo-2",
+      "namespace": "prod",
+      "replicas": 3,
+      "labels": {
+        "app": "svc-2"
+      },
+      "observed": true
+    }
+  }
+]

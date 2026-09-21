@@ -1,0 +1,7 @@
+[
+  {"asset_id":"kubernetes.resource_snapshot","source_id":"kubernetes","qualified_name":"kubernetes.resource_snapshot","asset_type":"snapshot","freshness_sla_seconds":172800,"classification":"internal","owner":"data-foundation","current_schema_version":1},
+  {"asset_id":"prometheus.metric_series","source_id":"prometheus","qualified_name":"prometheus.metric_series","asset_type":"metric_series","freshness_sla_seconds":172800,"classification":"internal","owner":"data-foundation","current_schema_version":1},
+  {"asset_id":"loki.log_stream","source_id":"loki","qualified_name":"loki.log_stream","asset_type":"log_stream","freshness_sla_seconds":172800,"classification":"internal","owner":"data-foundation","current_schema_version":1},
+  {"asset_id":"tempo.trace","source_id":"tempo","qualified_name":"tempo.trace","asset_type":"trace","freshness_sla_seconds":172800,"classification":"internal","owner":"data-foundation","current_schema_version":1},
+  {"asset_id":"ops.normalized_evidence","source_id":"kubernetes","qualified_name":"ops.normalized_evidence","asset_type":"normalized","freshness_sla_seconds":172800,"classification":"internal","owner":"data-foundation","current_schema_version":1}
+]

@@ -1,0 +1,6 @@
+[
+  {"source_id":"kubernetes","name":"Kubernetes API","source_type":"api","owner":"data-foundation","collection_interval_seconds":86400,"enabled":true},
+  {"source_id":"prometheus","name":"Prometheus","source_type":"metrics","owner":"data-foundation","collection_interval_seconds":86400,"enabled":true},
+  {"source_id":"loki","name":"Loki","source_type":"logs","owner":"data-foundation","collection_interval_seconds":86400,"enabled":true},
+  {"source_id":"tempo","name":"Tempo","source_type":"traces","owner":"data-foundation","collection_interval_seconds":86400,"enabled":true}
+]

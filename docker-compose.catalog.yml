@@ -1,0 +1,15 @@
+# 카탈로그 계층 로컬 검증용 최소 스택. 배치의 보관 원본(S3/MinIO)과 Airflow 스케줄러는
+# 이 저장소로 옮기지 않았다 — 카탈로그 적재·품질 검사·조회 API 는 PostgreSQL 만으로 검증된다.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: catalog
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d catalog"]
+      interval: 3s
+      timeout: 3s
+      retries: 20

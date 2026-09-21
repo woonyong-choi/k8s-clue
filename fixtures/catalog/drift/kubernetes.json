@@ -1,0 +1,50 @@
+[
+  {
+    "asset_id": "kubernetes.resource_snapshot",
+    "row_key": "kubernetes-0",
+    "cluster_id": "local",
+    "payload": {
+      "name": "kubernetes-0",
+      "namespace": "prod",
+      "replicas": "1",
+      "labels": {
+        "app": "svc-0"
+      }
+    }
+  },
+  {
+    "asset_id": "kubernetes.resource_snapshot",
+    "row_key": "kubernetes-1",
+    "cluster_id": "local",
+    "payload": {
+      "name": "kubernetes-1",
+      "namespace": "prod",
+      "replicas": "2",
+      "labels": {
+        "app": "svc-1"
+      }
+    }
+  },
+  {
+    "asset_id": "kubernetes.resource_snapshot",
+    "row_key": "kubernetes-2",
+    "cluster_id": "local",
+    "payload": {
+      "name": "kubernetes-2",
+      "namespace": "prod",
+      "replicas": "3",
+      "labels": {
+        "app": "svc-2"
+      }
+    }
+  },
+  {
+    "asset_id": "ops.normalized_evidence",
+    "row_key": "normalized-0",
+    "cluster_id": "local",
+    "payload": {
+      "evidence": "ok",
+      "count": 1
+    }
+  }
+]

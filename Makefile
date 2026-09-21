@@ -7,7 +7,7 @@ ENV_TEMPLATE ?= config/env/app.env.example
 
 export IMAGE_NAME
 
-.PHONY: help setup setup-hooks env sync hooks doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services event-bus-equivalence build-image demo clean
+.PHONY: help setup setup-hooks env sync hooks doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services event-bus-equivalence build-image demo clean catalog-up catalog-down catalog-schema catalog-run catalog-verify catalog-sql catalog-bench catalog-test
 
 help: ## 사용 가능한 명령어 출력
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -88,3 +88,27 @@ clean: ## 재생성 가능한 캐시와 빌드 산출물 삭제
 	rm -rf -- .pytest_cache .ruff_cache .import_linter_cache .playwright-cli
 	rm -rf -- frontend/.playwright-cli frontend/dist
 	find alembic src tests scripts -type d -name __pycache__ -prune -exec rm -rf -- {} +
+
+catalog-up: ## 카탈로그 로컬 PostgreSQL 기동
+	docker compose -f docker-compose.catalog.yml up -d --wait
+
+catalog-down: ## 카탈로그 로컬 스택 종료 (볼륨까지 제거)
+	docker compose -f docker-compose.catalog.yml down -v
+
+catalog-schema: ## 카탈로그 테이블 생성
+	uv run python scripts/catalog_schema.py
+
+catalog-run: ## 배치 1회 실행. DATE=YYYY-MM-DD 로 날짜 지정 가능
+	uv run python scripts/catalog_run.py --logical-date $(or $(DATE),$(shell date -u +%F))
+
+catalog-verify: ## 멱등성·부분 실패·드리프트·리니지 검증
+	uv run python scripts/catalog_verify.py
+
+catalog-sql: ## 정합성 검사 SQL 실행 결과 출력
+	uv run python scripts/catalog_sql.py
+
+catalog-bench: ## 검사 SQL 실행시간을 인덱스 유무로 비교
+	uv run python scripts/catalog_bench.py
+
+catalog-test: ## 카탈로그 계층 테스트 (DB 필요, 없으면 건너뜀)
+	uv run pytest tests/catalog -q

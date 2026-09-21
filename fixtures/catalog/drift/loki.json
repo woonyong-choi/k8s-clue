@@ -1,0 +1,44 @@
+[
+  {
+    "asset_id": "loki.log_stream",
+    "row_key": "loki-0",
+    "cluster_id": "local",
+    "payload": {
+      "name": "loki-0",
+      "namespace": "prod",
+      "replicas": 1,
+      "labels": {
+        "app": "svc-0"
+      },
+      "observed": true
+    }
+  },
+  {
+    "asset_id": "loki.log_stream",
+    "row_key": "loki-1",
+    "cluster_id": "local",
+    "payload": {
+      "name": "loki-1",
+      "namespace": "prod",
+      "replicas": 2,
+      "labels": {
+        "app": "svc-1"
+      },
+      "observed": true
+    }
+  },
+  {
+    "asset_id": "loki.log_stream",
+    "row_key": "loki-2",
+    "cluster_id": "local",
+    "payload": {
+      "name": "loki-2",
+      "namespace": "prod",
+      "replicas": 3,
+      "labels": {
+        "app": "svc-2"
+      },
+      "observed": true
+    }
+  }
+]

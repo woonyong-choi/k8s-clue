@@ -7,10 +7,15 @@ import base64
 import importlib.util
 import inspect
 import json
+import os
 import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from packages.runtime.app import EventContext
 
@@ -277,3 +282,37 @@ class SpyDb:
 
     def called(self, name: str) -> bool:
         return any(c[0] == name for c in self.calls)
+
+
+DEFAULT_CATALOG_DSN = "postgresql+psycopg://postgres@127.0.0.1:5433/catalog"
+
+
+@pytest.fixture(scope="session")
+def engine() -> Engine:
+    # 기본값을 둔다. 없으면 `make catalog-test` 가 조용히 DB 검사를 건너뛰고
+    # README 의 테스트 수가 거짓이 된다. 다른 카탈로그 스크립트도 같은 기본값을 쓴다.
+    dsn = os.environ.get("CATALOG_DATABASE_URL", DEFAULT_CATALOG_DSN)
+    engine = create_engine(dsn, future=True)
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:  # pragma: no cover - 환경 문제
+        pytest.skip(f"DB 에 붙을 수 없습니다: {exc}")
+
+    from domains.datacatalog import models  # noqa: F401 - 테이블 등록
+    from packages.storage.base import Base
+
+    tables = [table for name, table in Base.metadata.tables.items() if name.startswith("catalog_")]
+    Base.metadata.drop_all(engine, tables=tables)
+    Base.metadata.create_all(engine, tables=tables)
+    return engine
+
+
+@pytest.fixture
+def conn(engine: Engine):
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            yield connection
+        finally:
+            transaction.rollback()
