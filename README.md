@@ -29,7 +29,13 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 
 `make demo`는 **계약 테스트를 순서대로 실행**합니다. 실제 클러스터에 장애를 만들거나 GitHub에 PR을 발행하는 E2E 데모가 아닙니다.
 
+위 GIF는 `bash scripts/demo_terminal.sh`의 실제 실행입니다. `make demo`의 3단계(30 + 29 + 27 = 86개 계약 테스트 통과)와, Draft PR 수명주기 계약 테스트 이름의 일부를 보여 줍니다.
+
 ## 메인 기술
+
+![파이프라인 흐름도: 증거 수집, 규칙 RCA, 제한 패치, base SHA 재확인, Draft PR, 배포 후 회복 검증](docs/figure.png)
+
+그림은 아래 항목들의 관계를 정리한 개념도입니다(README의 설명 기준).
 
 - **읽기 전용 증거 수집 agent** — 대상 클러스터에서 Pod·Event를 읽기만 하고 쓰기 경로를 갖지 않습니다. 계약 테스트가 surface가 read-only임을 검사합니다. → [`evidence/collector.py`](src/services/target/cluster-agent/evidence/collector.py)
 - **사건 동일성과 중복 억제** — 같은 장애가 반복 수집돼도 durable unique identity로 한 사건으로 묶습니다. → [`domains/rca/models.py`](src/domains/rca/models.py)
