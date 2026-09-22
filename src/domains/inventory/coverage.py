@@ -1,8 +1,13 @@
-"""Inventory collection coverage helpers.
+"""수집 범위 증명 — 부분 관측 스냅샷이 삭제를 추론해도 되는 범위를 고른다.
 
-The cluster-agent can collect a bounded namespace cut without proving full-cluster
-liveness.  Keep the proof small and explicit so writers may delete only inside
-the scopes the snapshot actually observed.
+cluster-agent 는 전체 클러스터를 증명하지 않고 namespace 단위 cut 만 수집할 수 있다.
+그래서 "이번 스냅샷에 없다"는 "지워졌다"가 아니다. 삭제 권한은 끝까지 관측된
+(`observed`·`complete`·`delete_safe`, 잘리지 않았고 label selector 로 좁히지 않은)
+collection 에서만 나온다. Event 는 보존 기간 때문에 절대 삭제 권한을 얻지 못한다.
+
+생산자 주의: 이 모듈은 `collection_coverage` 항목을 **소비**만 한다. 항목을 만드는
+코드는 이 저장소에 없고(에이전트가 아직 내보내지 않는다) 없으면 삭제 범위가 빈
+튜플이 되어 아무것도 지우지 않는 쪽으로 닫힌다. docs/design.md 의 "알려진 한계" 참고.
 """
 
 from __future__ import annotations
@@ -13,10 +18,7 @@ from typing import Any
 
 from sqlalchemy import and_, false, or_
 
-from packages.contracts.event_bus.interfaces import JsonObject
-
 COLLECTION_COVERAGE_SUMMARY_KEY = "collection_coverage"
-COLLECTION_STATUS_KEY = "collection_status"
 
 POD_COLLECTION = "pods"
 NODE_COLLECTION = "nodes"
@@ -67,78 +69,11 @@ DELETE_SAFE_COLLECTIONS = frozenset(
     )
 )
 
-SCOPED_INVENTORY_COLLECTIONS = (
-    POD_COLLECTION,
-    WORKLOAD_COLLECTION,
-    WORKLOAD_REVISION_COLLECTION,
-    NODE_COLLECTION,
-    SERVICE_COLLECTION,
-    INGRESS_COLLECTION,
-    EVENT_COLLECTION,
-    ENDPOINT_COLLECTION,
-    RESOURCE_QUOTA_COLLECTION,
-    CUSTOM_RESOURCE_COLLECTION,
-)
-
-LEGACY_LIVE_INVENTORY_COLLECTIONS = (
-    POD_COLLECTION,
-    WORKLOAD_COLLECTION,
-    WORKLOAD_REVISION_COLLECTION,
-    NODE_COLLECTION,
-    SERVICE_COLLECTION,
-    INGRESS_COLLECTION,
-    ENDPOINT_COLLECTION,
-    RESOURCE_QUOTA_COLLECTION,
-)
-
 
 @dataclass(frozen=True)
 class InventoryDeleteScope:
     resource_type: str
     namespace: str | None
-
-
-def kubernetes_collection_coverage(kubernetes: Mapping[str, Any]) -> list[JsonObject]:
-    """Project collection-level coverage from a normalized Kubernetes evidence payload."""
-
-    scopes = _collection_scopes(kubernetes)
-    if not scopes:
-        return []
-
-    limits = _collection_limit_map(kubernetes)
-    statuses = _collection_status_map(kubernetes)
-    coverage: list[JsonObject] = []
-    for scope in scopes:
-        namespace = _text(scope.get("namespace"))
-        label_selector = _text(scope.get("label_selector"))
-        for collection in NAMESPACED_COLLECTIONS:
-            collection_status = _collection_status(statuses, collection)
-            coverage.append(
-                _coverage_entry(
-                    collection,
-                    scope="namespace",
-                    namespace=namespace,
-                    label_selector=label_selector,
-                    observed=_collection_observed(kubernetes, collection, collection_status),
-                    truncated=_collection_truncated(limits, collection),
-                    reason_codes=_reason_codes(collection_status.get("reason_codes")),
-                )
-            )
-
-    for collection in CLUSTER_COLLECTIONS:
-        collection_status = _collection_status(statuses, collection)
-        coverage.append(
-            _coverage_entry(
-                collection,
-                scope="cluster",
-                namespace=None,
-                label_selector="",
-                observed=_collection_observed(kubernetes, collection, collection_status),
-                truncated=_collection_truncated(limits, collection),
-                reason_codes=_reason_codes(collection_status.get("reason_codes")),
-            )
-        )
-    return coverage
 
 
 def inventory_deletion_scopes(source_summary: Mapping[str, Any]) -> tuple[InventoryDeleteScope, ...]:
@@ -194,84 +129,6 @@ def inventory_delete_scope_predicate(table: Any, scopes: Sequence[InventoryDelet
             clause = and_(clause, table.c.namespace == scope.namespace)
         clauses.append(clause)
     return or_(*clauses) if clauses else false()
-
-
-def _coverage_entry(
-    collection: str,
-    *,
-    scope: str,
-    namespace: str | None,
-    label_selector: str,
-    observed: bool,
-    truncated: bool,
-    reason_codes: Sequence[str] = (),
-) -> JsonObject:
-    coverage_reasons: list[str] = list(reason_codes)
-    if not observed:
-        coverage_reasons.append("collection_not_observed")
-    if scope == "namespace" and not namespace:
-        coverage_reasons.append("namespace_scope_unavailable")
-    if label_selector:
-        coverage_reasons.append("label_selector_scope")
-    if truncated:
-        coverage_reasons.append("collection_truncated")
-    delete_reasons = list(coverage_reasons)
-    if collection not in DELETE_SAFE_COLLECTIONS:
-        delete_reasons.append("collection_not_delete_authoritative")
-    complete = not coverage_reasons
-    delete_safe = not delete_reasons
-    return {
-        "collection": collection,
-        "resource_types": list(RESOURCE_TYPES_BY_COLLECTION.get(collection, ())),
-        "scope": scope,
-        "namespace": namespace,
-        "label_selector": label_selector or None,
-        "observed": observed,
-        "complete": complete,
-        "delete_safe": delete_safe,
-        "truncated": truncated,
-        "reason_codes": sorted(set(delete_reasons)),
-    }
-
-
-def _collection_scopes(payload: Mapping[str, Any]) -> tuple[JsonObject, ...]:
-    raw_scopes = payload.get("collection_scopes")
-    if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, str | bytes):
-        return ()
-    return tuple(dict(scope) for scope in raw_scopes if isinstance(scope, Mapping))
-
-
-def _collection_limit_map(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    limits = payload.get("collection_limits")
-    if not isinstance(limits, Mapping):
-        return {}
-    lists = limits.get("lists")
-    return lists if isinstance(lists, Mapping) else {}
-
-
-def _collection_status_map(payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    statuses = payload.get(COLLECTION_STATUS_KEY)
-    return statuses if isinstance(statuses, Mapping) else {}
-
-
-def _collection_status(statuses: Mapping[str, Any], collection: str) -> Mapping[str, Any]:
-    status = statuses.get(collection)
-    return status if isinstance(status, Mapping) else {}
-
-
-def _collection_truncated(limits: Mapping[str, Any], collection: str) -> bool:
-    limit = limits.get(collection)
-    return isinstance(limit, Mapping) and limit.get("truncated") is True
-
-
-def _collection_observed(
-    payload: Mapping[str, Any],
-    collection: str,
-    status: Mapping[str, Any],
-) -> bool:
-    if status.get("observed") is False:
-        return False
-    return isinstance(payload.get(collection), list)
 
 
 def _reason_codes(value: Any) -> tuple[str, ...]:
