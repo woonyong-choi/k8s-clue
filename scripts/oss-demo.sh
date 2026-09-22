@@ -10,7 +10,7 @@ scene() {
 
 scene "ImagePullBackOff evidence and deterministic RCA"
 uv run pytest -q \
-  tests/test_incident_alert_event.py \
+  tests/test_alertmanager_alert_event.py \
   tests/test_recovery_gitops_authority.py
 
 scene "base-SHA-pinned GitOps Draft PR"
@@ -22,3 +22,4 @@ scene "post-deploy evidence verification"
 uv run pytest -q tests/test_recovery_verification.py
 
 scene "Golden Path contract verified"
+uv run pytest -q tests/test_golden_path_safety_contracts.py
