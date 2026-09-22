@@ -4,6 +4,6 @@ description: Clue rule-first Kubernetes operations controller
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/woonyong-kr/k8s-clue-python-reference
+home: https://github.com/woonyong-choi/k8s-clue
 sources:
-  - https://github.com/woonyong-kr/k8s-clue-python-reference
+  - https://github.com/woonyong-choi/k8s-clue

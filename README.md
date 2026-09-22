@@ -2,15 +2,15 @@
 
 Kubernetes 장애 증거를 보존하고 규칙 기반 RCA로 원인을 판정한 뒤, 허용된 GitOps 변경을 GitHub Draft PR로 제안하는 Python 참조 구현입니다. 사건 ID로 증거·판정·변경 제안·배포 후 검증을 연결합니다.
 
-[Clue 제품 설계](https://github.com/woonyong-kr/clue) · [문서 목차](docs/README.md) · [Golden Path](docs/GOLDEN-PATH.md)
+[Project Map](docs/PROJECT-MAP.md) · [문서 목차](docs/README.md) · [Golden Path](docs/GOLDEN-PATH.md)
 
 ## 설치와 대표 실행
 
 Python 3.13과 [uv](https://docs.astral.sh/uv/getting-started/installation/)가 필요합니다.
 
 ```bash
-git clone https://github.com/woonyong-kr/k8s-clue-python-reference.git
-cd k8s-clue-python-reference
+git clone https://github.com/woonyong-choi/k8s-clue.git
+cd k8s-clue
 uv sync --all-groups
 make demo
 ```

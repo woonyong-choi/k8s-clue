@@ -26,7 +26,7 @@ export function App() {
           >
             Incidents
           </a>
-          <a href="https://github.com/woonyong-kr/k8s-clue-python-reference">GitHub</a>
+          <a href="https://github.com/woonyong-choi/k8s-clue">GitHub</a>
         </nav>
       </header>
       <main>
