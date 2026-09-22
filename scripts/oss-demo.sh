@@ -42,8 +42,12 @@ kind_scene() {
   scene "kind cluster reproduces ImagePullBackOff"
   local kc=(kubectl --context "${DEMO_KIND_CONTEXT}")
 
-  "${kc[@]}" create namespace "${DEMO_KIND_NAMESPACE}" \
-    --dry-run=client -o yaml | "${kc[@]}" apply -f -
+  # 직전 실행이 --wait=false 로 지운 네임스페이스가 아직 Terminating 이면,
+  # 그 안에 apply 한 Deployment 가 곧바로 회수돼 파드가 생기지 않는다.
+  # 다시 만들기 전에 완전히 사라질 때까지 기다린다.
+  "${kc[@]}" delete namespace "${DEMO_KIND_NAMESPACE}" \
+    --ignore-not-found --wait=true --timeout=120s >/dev/null
+  "${kc[@]}" create namespace "${DEMO_KIND_NAMESPACE}" >/dev/null
 
   "${kc[@]}" -n "${DEMO_KIND_NAMESPACE}" apply -f - <<'MANIFEST'
 apiVersion: apps/v1
