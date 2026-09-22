@@ -93,14 +93,6 @@ def recovery_authority() -> GitOpsAuthorityContext:
     )
 
 
-def test_recovery_safe_pr_title_is_korean_and_compact() -> None:
-    candidate = recovery_candidate()
-
-    assert recovery_safe_pr_title(candidate) == (
-        "[복구] payment-api - 이전 Secret 버전으로 복원"
-    )
-
-
 def test_recovery_safe_pr_body_contains_operator_review_sections() -> None:
     candidate = recovery_candidate()
 

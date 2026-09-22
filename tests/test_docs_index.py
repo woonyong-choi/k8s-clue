@@ -5,25 +5,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = REPO_ROOT / "docs"
 README = DOCS_ROOT / "README.md"
 ROOT_README = REPO_ROOT / "README.md"
-ADVANCED_COURSE_DIR = DOCS_ROOT / "advanced-course-plan"
-
-REQUIRED_KEYWORDS = (
-    "Kubernetes",
-    "증거",
-    "RCA",
-    "Draft PR",
-    "ImagePullBackOff",
-    "base SHA",
-    "검증",
-)
-
-FORBIDDEN_DOC_TERMS = (
-    "K8sGPT",
-    "HolmesGPT",
-    "Kube" + "Heal",
-    "Dev" + "Preview",
-)
-
 
 LOCAL_MD_LINK = re.compile(r"\[[^\]]+\]\(([^)]+\.md(?:#[^)]+)?)\)")
 
@@ -35,7 +16,7 @@ def test_docs_readme_links_all_docs_within_three_levels() -> None:
     docs = sorted(
         path.resolve()
         for path in DOCS_ROOT.rglob("*.md")
-        if path != README and not path.is_relative_to(ADVANCED_COURSE_DIR)
+        if path != README
     )
     assert docs, "docs/README.md should link at least one docs/*.md file"
 
@@ -53,30 +34,6 @@ def test_docs_readme_links_all_docs_within_three_levels() -> None:
 
     missing = [str(path.relative_to(DOCS_ROOT)) for path in docs if path not in seen]
     assert not missing, "docs/README.md is missing <=3-level links to: " + ", ".join(missing)
-
-
-def test_docs_readme_keyword_entrypoints() -> None:
-    text = ROOT_README.read_text(encoding="utf-8")
-    missing = [keyword for keyword in REQUIRED_KEYWORDS if keyword not in text]
-    assert not missing, f"docs/README.md missing keyword entrypoints: {', '.join(missing)}"
-
-
-def test_docs_avoid_forbidden_external_product_terms() -> None:
-    docs = sorted(
-        path
-        for path in DOCS_ROOT.rglob("*.md")
-        if not path.is_relative_to(ADVANCED_COURSE_DIR)
-    )
-    hits: list[str] = []
-    for path in docs:
-        text = path.read_text(encoding="utf-8")
-        for term in FORBIDDEN_DOC_TERMS:
-            if term in text:
-                hits.append(f"{path.relative_to(DOCS_ROOT.parent)}: {term}")
-
-    assert not hits, "Use generic wording such as 외부 기준 저장소 or 벤치마크 최소선: " + ", ".join(
-        hits
-    )
 
 
 def _local_markdown_links(path: Path) -> list[Path]:

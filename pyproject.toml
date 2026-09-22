@@ -24,6 +24,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.112",
     "import-linter>=2.0",
     "pre-commit>=4.6.0",
     "pytest>=8.4.0",
