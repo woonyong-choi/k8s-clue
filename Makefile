@@ -7,7 +7,7 @@ ENV_TEMPLATE ?= config/env/app.env.example
 
 export IMAGE_NAME
 
-.PHONY: help setup setup-hooks env sync hooks doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services event-bus-equivalence build-image demo clean catalog-up catalog-down catalog-schema catalog-run catalog-verify catalog-sql catalog-bench catalog-test
+.PHONY: help setup setup-hooks env sync hooks doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services rca-eval event-bus-equivalence build-image demo clean catalog-up catalog-down catalog-schema catalog-run catalog-verify catalog-sql catalog-bench catalog-test
 
 help: ## 사용 가능한 명령어 출력
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -74,6 +74,10 @@ events: ## 등록된 이벤트/구독자 출력
 
 services: ## 기본 runtime 서비스 출력
 	uv run python scripts/services.py
+
+rca-eval: ## 룰 카탈로그 골든셋 재생성 + RCA 엔진 실측 (evals/results.*)
+	uv run python evals/build_golden_set.py
+	uv run python evals/run_eval.py
 
 event-bus-equivalence: ## in-process/NATS 결과 동등성
 	bash scripts/test-event-bus-equivalence.sh

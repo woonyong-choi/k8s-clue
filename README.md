@@ -18,7 +18,7 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 |---|---|---|
 | 완결 보장 시나리오 | 여러 경로가 부분 구현 | ImagePullBackOff **1개를 계약 테스트로 고정** |
 | `make demo` | 실행 실패 (없는 파일 참조) | **86개 계약 테스트 통과** |
-| 전체 테스트 | — | **284개 통과** |
+| 전체 테스트 | — | **294개 통과** (핵심 주장은 속성 테스트로 증명) |
 | 운영 데이터 계층 | 별도 저장소(`k8s-ops-min`)에 분산 | **정본에 흡수** — 카탈로그 79개 통과 |
 
 ## 구동모습
@@ -36,16 +36,18 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 ![파이프라인 흐름도: 증거 수집, 규칙 RCA, 제한 패치, base SHA 재확인, Draft PR, 배포 후 회복 검증](docs/figure.png)
 
 그림은 아래 항목들의 관계를 정리한 개념도입니다(README의 설명 기준).
+**왜 이 자료구조를 골랐고 무엇을 버렸는지, 그리고 지금 열려 있는 구멍은
+[설계 근거 — docs/design.md](docs/design.md)에 적었습니다.**
 
 - **읽기 전용 증거 수집 agent** — 대상 클러스터에서 Pod·Event를 읽기만 하고 쓰기 경로를 갖지 않습니다. 계약 테스트가 surface가 read-only임을 검사합니다. → [`evidence/collector.py`](src/services/target/cluster-agent/evidence/collector.py)
 - **사건 동일성과 중복 억제** — 같은 장애가 반복 수집돼도 durable unique identity로 한 사건으로 묶습니다. → [`domains/rca/models.py`](src/domains/rca/models.py)
-- **결정론적 versioned rule RCA** — `wrong_image_tag` 같은 규칙에 버전을 붙여 같은 증거에 같은 판정이 나오게 합니다. LLM 추론으로 원인을 만들어내지 않습니다. → [`pipeline/causes.py`](src/services/ai/agent/pipeline/causes.py)
-- **allowlist 기반 제한 패치** — Deployment의 허용된 scalar 필드만 바꿉니다. 다른 리소스 종류·미승인 필드는 거부합니다. → [`domains/gitops/source_patch.py`](src/domains/gitops/source_patch.py)
+- **결정론적 versioned rule RCA** — 규칙 카탈로그(YAML 29개 rule / 87개 candidate)로만 판정하고, 규칙 밖이면 추측 대신 실패 단계와 reason code를 남기고 멈춥니다. 소스 존재만으로 점수가 1.0이 되던 오판은 판별 신호를 분모에 넣어 막았습니다. `make rca-eval`이 87개 candidate 전부에 대해 **가려진 후보 0개 / 정상 증거 오탐 0개**를 실측합니다. → [`causes/engine.py`](src/services/ai/agent/causes/engine.py) · [실측 결과](evals/results.md) · [왜 LLM 판정을 버렸나](docs/design.md#2-원인-판정의-경계--왜-llm-이-아니라-versioned-rule-인가)
+- **승인 원문 byte 를 보존하는 제한 패치** — Deployment의 허용된 scalar만, 그것도 YAML을 다시 덤프하지 않고 대상 scalar node의 `start_mark ~ end_mark` 구간만 갈아끼웁니다. 치환 후 재파싱해 승인 범위 밖이 움직였으면 패치를 버립니다. "정확히 한 줄만 움직이고 rollback이 원문을 byte 단위로 복원한다"를 속성 테스트로 고정했습니다. → [`domains/gitops/source_patch.py`](src/domains/gitops/source_patch.py) · [왜 round-trip 덤프를 버렸나](docs/design.md#1-변경의-경계--왜-yaml-을-다시-쓰지-않고-byte-span-만-갈아끼우는가)
 - **base SHA 재확인 Draft PR** — 생성 직전 base SHA를 다시 읽어 그 사이 브랜치가 움직였으면 실패 처리합니다. provider에 merge 경로 자체가 없습니다. → [`github_provider.py`](src/services/gitops/scm-worker/github_provider.py)
 - **배포 후 회복 검증** — 변경 전 기준선과 새 evidence window를 비교해 실제로 회복됐는지 판정합니다. → [`recovery_verification.py`](src/domains/rca/recovery_verification.py)
 - **correlation / causation 전파** — worker가 만드는 자식 이벤트가 부모의 correlation·causation id를 물려받아 사건 단위로 추적됩니다. → [`test_golden_path_safety_contracts.py`](tests/test_golden_path_safety_contracts.py)
 - **event bus 모드 동등성** — in-process와 NATS 두 모드의 결과가 같은지 별도 스크립트로 검사합니다. → `make event-bus-equivalence`
-- **수집 완전성 계약** — 수집 결과를 completed / partial / unavailable 과 사유로 나눠 넘겨, 빈 결과를 "이상 없음"으로 오인하지 않게 합니다. → [`inventory/coverage.py`](src/domains/inventory/coverage.py)
+- **수집 완전성 계약** — 수집 결과를 completed / partial / unavailable 과 사유로 나눠 넘겨, 빈 결과를 "이상 없음"으로 오인하지 않게 합니다. 부분 관측 스냅샷은 **끝까지 관측한 범위 안에서만** 삭제를 추론할 수 있고(Event는 어떤 조건에서도 불가), 이 불변식은 속성 테스트로 고정돼 있습니다. 다만 투영 단계가 아직 연결돼 있지 않아 지금은 항상 "아무것도 지우지 않는" 쪽으로 닫힙니다 — [한계와 다음 단계](docs/design.md#알려진-한계-지금-열려-있는-구멍). → [`inventory/coverage.py`](src/domains/inventory/coverage.py)
 - **운영 데이터 카탈로그** — 자산·스키마 계약·리니지·실행 단위를 PostgreSQL 에 적재하고, 조회 응답마다 그 결과가 부분 데이터인지(`run_status`) 함께 돌려줍니다. → [`domains/datacatalog/`](src/domains/datacatalog/)
 - **고장 입력으로 검증하는 품질 SQL** — 신선도·스키마 드리프트·중복·리니지 단절을 정상 입력뿐 아니라 실제로 검출해야 할 고장 입력으로 확인합니다. → [`sql/checks/`](sql/checks/)
 
@@ -59,6 +61,7 @@ Kubernetes 장애의 증거를 보존하고 규칙 기반 RCA로 원인을 판�
 
 ## 링크
 
+- [설계 근거 — 왜 이 자료구조인가, 버린 대안, 알려진 한계](docs/design.md)
 - [Golden Path 안전 계약](docs/GOLDEN-PATH.md)
 - [수집 완전성 계약](docs/collection-contract.md) · [메타데이터 카탈로그](docs/metadata-catalog.md) · [품질 검사 SQL](docs/sql-quality-checks.md) · [카탈로그 조회 API](docs/catalog-api.md)
 - [Python 선행 정리 계획 (Java 인수 조건)](docs/PYTHON-FIRST-PLAN.md)
@@ -140,12 +143,13 @@ Docker·kubectl·kind는 이미지·클러스터 검증에 씁니다. 전체 도
 
 [![CI](https://github.com/woonyong-choi/k8s-clue/actions/workflows/ci.yml/badge.svg)](https://github.com/woonyong-choi/k8s-clue/actions/workflows/ci.yml)
 
-**전체 284개 테스트 통과**, **`make demo` 계약 86개 통과**입니다(2026-09-22 로컬 재실행).[^tests]
+**전체 294개 테스트 통과**, **`make demo` 계약 86개 통과**입니다(2026-09-22 로컬 재실행).[^tests]
 
 | 검사 | 결과 | 명령 |
 |---|---:|---|
-| 전체 pytest (PostgreSQL 기동 시) | **284 passed** | `make catalog-up && make test` |
-| 전체 pytest (DB 없이 — 카탈로그 36개 skip) | 248 passed, 36 skipped | `make test` |
+| 전체 pytest (PostgreSQL 기동 시) | **294 passed** | `make catalog-up && make test` |
+| 전체 pytest (DB 없이 — 카탈로그 36개 skip) | 258 passed, 36 skipped | `make test` |
+| RCA 엔진 실측 — 가려진 후보 / 정상 증거 오탐 | **0 / 0** (87 candidate) | `make rca-eval` |
 | demo — ImagePullBackOff 증거·RCA | 30 passed | `make demo` |
 | demo — base SHA 고정 Draft PR | 29 passed | `make demo` |
 | demo — 배포 후 증거 검증 | 27 passed | `make demo` |
@@ -155,8 +159,9 @@ Docker·kubectl·kind는 이미지·클러스터 검증에 씁니다. 전체 도
 
 ```bash
 make catalog-up               # 카탈로그 검사에 필요한 PostgreSQL
-make test                     # 284개 테스트 + lint + lock 일치 검사
+make test                     # 294개 테스트 + lint + lock 일치 검사
 make demo                     # Golden Path 계약 86개
+make rca-eval                 # 룰 카탈로그 골든셋 재생성 + RCA 엔진 실측
 make gate-backend             # CI backend job과 동일 (test + manifest-check)
 make event-bus-equivalence    # in-process ↔ NATS 결과 동등성
 ```
@@ -178,4 +183,4 @@ CI는 backend(`make gate-backend`)와 frontend(`npm run check`) 두 job으로 �
 - [GitHub REST API — Pulls](https://docs.github.com/en/rest/pulls/pulls)
 
 [^authors]: `git log --author='woonyong' --reverse --format='%h %ad %s' --date=short`. 팀 기준선 `b749f3b`~`e1a9c79`는 프로젝트 기록 기준입니다.
-[^tests]: `make test`의 pytest 합계와 `make demo`의 장면별 pytest 합계(30+29+27). 284는 `make catalog-up` 으로 PostgreSQL 을 띄운 상태의 수이며, DB 없이는 카탈로그 36개가 skip 되어 248이 됩니다.
+[^tests]: `make test`의 pytest 합계와 `make demo`의 장면별 pytest 합계(30+29+27). 294는 `make catalog-up` 으로 PostgreSQL 을 띄운 상태의 수이며, DB 없이는 카탈로그 36개가 skip 되어 258이 됩니다.
