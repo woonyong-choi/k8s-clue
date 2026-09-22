@@ -51,3 +51,26 @@ jobs:
         uses: docker://rhysd/actionlint:latest
         with:
           args: -color
+
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: clue-demo
+      - name: Run OSS demo (kind ImagePullBackOff -> Draft PR contract -> verification)
+        env:
+          # 토큰이 없으므로 실제 Draft PR은 만들지 않는다. Draft PR 단계는
+          # 계약 테스트(모킹된 GitOps 경로)로만 검증한다.
+          DEMO_SKIP_PR: "1"
+          DEMO_KIND_CONTEXT: kind-clue-demo
+        run: make demo

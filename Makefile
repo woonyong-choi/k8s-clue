@@ -86,7 +86,7 @@ build-image: ## 로컬 container image 빌드
 	bash scripts/build-image.sh
 
 demo: ## Kind ImagePullBackOff → Draft PR → 검증 데모
-	bash -c "DEMO_DRY_RUN='$(DEMO_DRY_RUN)' bash scripts/oss-demo.sh"
+	bash -c "DEMO_DRY_RUN='$(DEMO_DRY_RUN)' DEMO_SKIP_PR='$(DEMO_SKIP_PR)' DEMO_KIND_CONTEXT='$(DEMO_KIND_CONTEXT)' bash scripts/oss-demo.sh"
 
 clean: ## 재생성 가능한 캐시와 빌드 산출물 삭제
 	rm -rf -- .pytest_cache .ruff_cache .import_linter_cache .playwright-cli

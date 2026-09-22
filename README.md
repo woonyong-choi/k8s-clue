@@ -108,6 +108,8 @@ make demo
 
 운영 데이터 카탈로그 계층은 PostgreSQL 하나만 필요합니다.
 
+CI의 `demo` job은 kind 클러스터를 띄우고 `DEMO_KIND_CONTEXT`를 넘겨, 없는 image tag를 쓰는 Deployment가 실제로 `ImagePullBackOff`에 들어가는지 관측한 뒤 같은 계약 테스트를 실행합니다(`DEMO_SKIP_PR=1`이므로 PR은 발행하지 않습니다).
+
 ```bash
 make catalog-up      # PostgreSQL 기동 (healthy 까지 대기)
 make catalog-schema  # 카탈로그 테이블 생성
