@@ -68,7 +68,8 @@ def replica_plan(current: int, desired: int, source: str) -> ManifestScalarPatch
     )
 
 
-@settings(max_examples=120, suppress_health_check=[HealthCheck.too_slow])
+# deadline 없음 — 여기서 고정하려는 것은 속도가 아니라 byte 보존이다.
+@settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     indent=indents,
     leading=comments,
@@ -95,7 +96,8 @@ def test_replica_patch_moves_exactly_one_line_and_keeps_every_other_byte(
     assert yaml.safe_load(patched)["spec"]["replicas"] == desired
 
 
-@settings(max_examples=120, suppress_health_check=[HealthCheck.too_slow])
+# deadline 없음 — 여기서 고정하려는 것은 속도가 아니라 byte 보존이다.
+@settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     indent=indents,
     leading=comments,
@@ -121,7 +123,8 @@ def test_rollback_restores_the_approved_source_byte_for_byte(
     assert restored == source
 
 
-@settings(max_examples=120, suppress_health_check=[HealthCheck.too_slow])
+# deadline 없음 — 여기서 고정하려는 것은 속도가 아니라 byte 보존이다.
+@settings(max_examples=120, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     indent=indents,
     pair=replica_pairs,
