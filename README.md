@@ -121,7 +121,7 @@ CI는 4개 job입니다 — `backend`(`make gate-backend`), `frontend`(`npm run 
 
 ## 관련 링크
 
-- [설계 근거](docs/design.md) — 왜 이 자료구조인가, 버린 대안, 알려진 한계
+- [설계 근거](docs/design.md) — 안전 규칙과 알려진 한계
 - [Golden Path 안전 계약](docs/GOLDEN-PATH.md) — 9개 조항의 코드 강제 지점과 회귀 테스트
 - [팀 과제와 개인 확장의 경계](docs/personal-extension.md) — 커밋 범위, 정리 전후, 기술 스펙
 - 운영 데이터 카탈로그 — [수집 완전성 계약](docs/collection-contract.md) · [메타데이터 카탈로그](docs/metadata-catalog.md) · [품질 검사 SQL](docs/sql-quality-checks.md) · [조회 API](docs/catalog-api.md)
