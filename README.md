@@ -82,59 +82,15 @@ flowchart LR
   VER -->|"resolved / verification failed"| DB
 ```
 
-설계 문서: [설계 근거 — 버린 대안과 알려진 한계](docs/design.md) · [Golden Path 안전 계약 9개 조항](docs/GOLDEN-PATH.md) · [Project Map](docs/PROJECT-MAP.md) · [문서 목차](docs/README.md)
+설계 문서: [설계 근거와 알려진 한계](docs/design.md) · [Golden Path 안전 계약 9개 조항](docs/GOLDEN-PATH.md) · [Project Map](docs/PROJECT-MAP.md) · [문서 목차](docs/README.md)
 
-## 핵심 결정과 트레이드오프
+## 안전 규칙
 
-### 1. YAML을 다시 쓰지 않고 byte span만 갈아끼운다
-
-**문제** — PR로 나가는 것은 사람이 읽고 승인할 diff다. 의도하지 않은 줄이 한 줄이라도 섞이면 리뷰어는 그 PR 전체를 믿을 수 없다.
-
-**선택** — 승인된 원문을 `yaml.compose_all`로 node 트리로 파싱해 대상 `ScalarNode`의 `start_mark ~ end_mark` 구간만 문자열 치환하고, 치환 후 다시 파싱해 승인 범위 밖이 움직였으면 패치를 버린다.
-
-**버린 대안** — `ruamel.yaml` round-trip 덤프는 코드가 훨씬 적지만 인용 방식·빈 줄·flow 스타일·긴 줄 접힘이 덤퍼 설정에 따라 달라져서 보존이 "어느 정도"에 그친다. kustomize overlay를 얹는 방법은 그 파일이 앞으로 모든 필드를 덮어쓸 수 있는 자리가 되어, "Deployment의 허용된 scalar만"이라는 제약이 파일 구조가 아니라 사람의 규율에 의존하게 된다.
-
-**근거** — [`domains/gitops/source_patch.py`](src/domains/gitops/source_patch.py) · 속성 테스트 [`test_source_patch_splice_properties.py`](tests/test_source_patch_splice_properties.py)가 들여쓰기·주석·인용 방식을 바꿔 가며 ① 정확히 한 줄만 움직이고 ② 주석 수가 보존되고 ③ rollback이 원문을 byte 단위로 복원하는지 검사한다.
-
-### 2. 원인 판정을 LLM이 아니라 versioned rule로 한다
-
-**문제** — 판정이 비결정적이면 같은 증거에 어제와 오늘 다른 답이 나오고, "왜 이 PR이 생겼는가"를 사후에 재구성할 수 없다.
-
-**선택** — YAML 룰 카탈로그(29 rule / 87 candidate)로만 판정한다. 규칙 밖이면 그럴듯한 추측 대신 실패 단계·reason code·원본 evidence reference를 남기고 멈춘다. 소스 존재만으로 점수가 1.0이 되던 오판은 판별 신호를 분모에 넣어 막았고, 점수 동률이면 판별 신호를 더 많이 충족한 후보를 고른다.
-
-**버린 대안** — LLM에게 원인을 묻는 경로는 재현되지 않아 승인 절차의 입력이 될 수 없다(`CauseCandidate.source`에 `ai_fallback` 자리만 남겨 두었다). 룰을 파이썬 코드로만 쓰는 초기 구현은 시나리오 하나 추가에 코드 리뷰가 필요하고 룰 전체를 한눈에 비교할 수 없어 버렸다.
-
-**근거** — [`services/ai/agent/causes/engine.py`](src/services/ai/agent/causes/engine.py) · `make rca-eval`이 116개 시나리오에서 accuracy 87/87, 오탐 0/29, confusion pair 0을 실측한다([evals/results.md](evals/results.md)). 골든셋은 카탈로그를 역산한 합성 입력이므로 이 100%는 "정확하다"가 아니라 **"어떤 후보도 가려져 있지 않다"**는 뜻이다.
-
-### 3. PR 생성 직전에 base SHA를 다시 읽는다
-
-**문제** — 증거 수집 시점과 PR 생성 시점 사이에 대상 브랜치가 움직이면 엉뚱한 기준에 패치가 얹힌다.
-
-**선택** — branch·file 준비를 끝낸 뒤 base ref를 다시 읽어 처음 검증한 SHA와 다르면 PR POST 전에 중단한다. 실패로 처리하되 원본 evidence reference는 잃지 않는다. provider에 merge API 호출 경로 자체가 없고, `draft: true`가 아닌 응답은 거부한다.
-
-**버린 대안** — 수집 시점 SHA를 그대로 신뢰하고 GitHub의 충돌 처리에 맡기는 방법. GitHub은 base가 전진해도 PR을 만들어 주므로, 잘못된 기준 위의 patch가 조용히 리뷰로 넘어간다.
-
-**근거** — [`services/gitops/scm-worker/github_provider.py`](src/services/gitops/scm-worker/github_provider.py) · [`test_safe_pr_structured_base_advance.py`](tests/test_safe_pr_structured_base_advance.py)(12건) · [`test_recovery_pr_lifecycle.py`](tests/test_recovery_pr_lifecycle.py)(17건)
-
-### 4. "이번에 안 보였다"를 "지워졌다"로 읽지 않는다
-
-**문제** — 에이전트는 전체 클러스터가 아니라 namespace 단위 cut만 수집할 수 있다. 수집이 잘렸거나 label selector로 좁혀졌는데 스냅샷에 없는 리소스를 삭제로 처리하면, 살아 있는 리소스가 대량으로 deleted로 표시된다 — 되돌리기 가장 어려운 실패다.
-
-**선택** — 삭제 권한을 범위 단위로 발급한다. `observed ∧ complete ∧ delete_safe ∧ ¬truncated ∧ selector 없음 ∧ reason code 없음`인 collection에서만 `(resource_type, namespace)` 범위를 내준다. Event는 보존 기간이 지나면 사라지므로 어떤 조건에서도 삭제 권한을 얻지 못한다.
-
-**버린 대안** — "수집이 완전할 때만 삭제한다"는 더 단순하고 지금도 fallback으로 남아 있다. 버린 것은 아니고 그 위에 범위 삭제를 얹었다. 큰 클러스터에서 전체 수집이 매번 완전하기를 기대할 수 없어 inventory가 영원히 늙은 행을 들게 되기 때문이다.
-
-**근거** — [`domains/inventory/coverage.py`](src/domains/inventory/coverage.py) · 속성 테스트 [`test_inventory_delete_scope_properties.py`](tests/test_inventory_delete_scope_properties.py). 다만 투영 단계가 아직 연결돼 있지 않아 런타임에서는 항상 빈 범위를 돌려준다(아래 [범위와 한계](#범위와-한계)).
-
-### 5. 권한 검사를 소스가 아니라 렌더링 결과에 건다
-
-**문제** — 에이전트에 read-only 권한만 부여해도, 차트가 조건 분기로 만들어 내는 최종 manifest가 실제로 클러스터에 적용된다.
-
-**선택** — Helm으로 렌더링한 manifest 전체를 검사해 `get`/`list`/`watch` 밖의 verb, `pods/exec`·`pods/attach`·`pods/portforward`·`nodes/proxy`, wildcard(`*`)가 하나라도 있으면 CI를 중단시킨다.
-
-**버린 대안** — 차트 소스의 `rules:` 블록만 문자열로 검사하는 방법. 조건 분기와 값 오버라이드로 생기는 최종 결과를 보지 못한다.
-
-**근거** — [`scripts/manifest-check.sh`](scripts/manifest-check.sh)(렌더된 Kubernetes object 11개 검사) · [`test_agent_kubernetes_surface_is_read_only`](tests/test_golden_path_safety_contracts.py) · CI `backend` job이 `make gate-backend`로 함께 돌린다.
+- **YAML 패치** — 원문을 다시 덤프하지 않고 허용한 `ScalarNode`의 byte span만 바꿉니다. 속성 테스트가 한 줄만 바뀌는지, 주석 수가 유지되는지, rollback이 원문을 복원하는지 확인합니다. → [`domains/gitops/source_patch.py`](src/domains/gitops/source_patch.py)
+- **원인 판정** — 버전이 붙은 YAML 룰 카탈로그(29 rule / 87 candidate)로 판단합니다. 규칙 밖의 증거는 reason code와 원문 참조를 남기고 멈춥니다. → [`services/ai/agent/causes/engine.py`](src/services/ai/agent/causes/engine.py), [`evals/results.md`](evals/results.md)
+- **Draft PR** — PR 생성 직전에 base SHA를 다시 읽고, 처음 확인한 SHA와 다르면 중단합니다. `draft: true`가 아닌 응답을 거부하고 merge API는 호출하지 않습니다. → [`github_provider.py`](src/services/gitops/scm-worker/github_provider.py)
+- **인벤토리 삭제** — 수집 범위가 완전하고 잘리지 않았으며 selector와 reason code가 없을 때만 `(resource_type, namespace)` 삭제 범위를 발급합니다. Event는 삭제 범위를 얻지 못합니다. → [`coverage.py`](src/domains/inventory/coverage.py)
+- **권한 검사** — Helm이 렌더링한 manifest에서 read-only 밖의 verb, exec·attach·proxy, wildcard가 보이면 CI가 실패합니다. → [`manifest-check.sh`](scripts/manifest-check.sh)
 
 ## 검증
 
