@@ -9,6 +9,10 @@
 > 장애 대응 자동화에서 가장 위험한 것은 **못 고치는 것이 아니라 잘못 고치는 것**이다.
 > 그래서 판단을 넓히는 대신, **이 도구가 절대 하지 않는 일**을 코드로 강제한다.
 
+![파이프라인 흐름도: 증거 수집 → 사건 동일성 → versioned rule RCA. 규칙 밖이면 실패 단계와 reason code를 남기고 멈추고, 규칙과 맞으면 allowlist 제한 패치 → base SHA 재확인 → Draft PR → 사람 승인 → 배포 후 회복 검증으로 이어진다](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/figure.png)
+
+위 그림에서 위쪽 갈래(규칙 밖 → 실패 단계·reason code 보존)가 이 저장소가 지키려는 fail-closed 경로다. 아래 갈래만 PR로 나간다.
+
 세 개의 경계가 그 문장을 코드로 옮긴 것이다 — 원인 판정의 경계, 변경의 경계,
 관측의 경계. 아래는 각 경계에서 고른 자료구조와 버린 대안이다.
 

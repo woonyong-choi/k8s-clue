@@ -6,6 +6,7 @@
 - [Python 선행 정리 계획](./PYTHON-FIRST-PLAN.md): Clue CLI 기준 재구성, 제거 순서와 Java 인수 조건
 - [Golden Path](./GOLDEN-PATH.md): ImagePullBackOff 증거부터 배포 후 검증까지의 현재 안전 계약
 - [Project Map](./PROJECT-MAP.md): 정리 전 runtime, route와 디렉터리의 현재 책임
+- [팀 과제와 개인 확장의 경계](./personal-extension.md): 역할, 커밋 범위, 정리 전후, 기술 스펙
 
 ## 운영 데이터 카탈로그
 
