@@ -1,3 +1,6 @@
+{{- if ne (int .Values.controller.replicas) 1 -}}
+{{- fail "controller.replicas must be 1 while the event bus and sessions are local" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -111,6 +114,8 @@ spec:
                   key: DATABASE_URL
             - name: DATABASE_STARTUP_MODE
               value: initialize
+            - name: REDIS_URL
+              value: redis://127.0.0.1:6379/0
             - name: FILTER_CURSOR_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
@@ -183,6 +188,27 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
+        - name: redis
+          image: {{ .Values.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server", "--bind", "127.0.0.1", "--save", "", "--appendonly", "no"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "-h", "127.0.0.1", "ping"]
+            periodSeconds: 3
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "-h", "127.0.0.1", "ping"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
         - name: console
           image: {{ include "clue.consoleImage" . | quote }}
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
