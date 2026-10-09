@@ -7,12 +7,12 @@ ENV_TEMPLATE ?= config/env/app.env.example
 
 export IMAGE_NAME
 
-.PHONY: help setup setup-hooks env sync hooks doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services rca-eval event-bus-equivalence build-image demo clean catalog-up catalog-down catalog-schema catalog-run catalog-verify catalog-sql catalog-bench catalog-test
+.PHONY: help setup env sync doctor lint format test manifest-check product-brand-boundary-check gate gate-backend gate-frontend gate-fast events services rca-eval event-bus-equivalence build-image demo clean catalog-up catalog-down catalog-schema catalog-run catalog-verify catalog-sql catalog-bench catalog-test
 
 help: ## 사용 가능한 명령어 출력
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-24s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-setup: env sync setup-hooks ## 최초 개발 환경 준비
+setup: env sync ## 최초 개발 환경 준비
 
 env: ## 로컬 .env 생성
 	@if [[ -f .env ]]; then \
@@ -33,16 +33,6 @@ lint: ## Python lint
 
 format: ## Python format
 	uv run ruff format .
-
-hooks: ## pre-commit과 pre-push hook 설치
-	uv run pre-commit install --hook-type pre-commit --hook-type pre-push
-
-setup-hooks: hooks ## commit message gate 설치
-	@hook_path="$$(git rev-parse --git-path hooks)/commit-msg"; \
-	mkdir -p "$$(dirname "$$hook_path")"; \
-	printf '%s\n' '#!/usr/bin/env sh' 'exec "$$(git rev-parse --show-toplevel)/scripts/commit-msg-gate.sh" "$$1"' > "$$hook_path"; \
-	chmod +x "$$hook_path"; \
-	echo "installed $$hook_path"
 
 test: ## Backend lint와 pytest
 	bash scripts/test.sh
@@ -85,8 +75,8 @@ event-bus-equivalence: ## in-process/NATS 결과 동등성
 build-image: ## 로컬 container image 빌드
 	bash scripts/build-image.sh
 
-demo: ## Kind ImagePullBackOff → Draft PR → 검증 데모
-	bash -c "DEMO_DRY_RUN='$(DEMO_DRY_RUN)' DEMO_SKIP_PR='$(DEMO_SKIP_PR)' DEMO_KIND_CONTEXT='$(DEMO_KIND_CONTEXT)' bash scripts/oss-demo.sh"
+demo: ## 선택적 kind 재현과 증거·Draft PR·회복 계약 검사
+	bash scripts/oss-demo.sh
 
 clean: ## 재생성 가능한 캐시와 빌드 산출물 삭제
 	rm -rf -- .pytest_cache .ruff_cache .import_linter_cache .playwright-cli
