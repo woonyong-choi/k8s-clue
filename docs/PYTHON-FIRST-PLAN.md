@@ -1,767 +1,94 @@
-# k8s-clue Python 정리 계획
+# Python 제품 완성 계획
 
-## 결정
-
-- `k8s-clue`를 먼저 고친다.
-- `k8s-clue`는 Python 행동 참조 구현으로 마무리한다.
-- Java 구현은 Python Handoff Gate 통과 후 시작한다.
-- Python에서 Hub, Fleet, 사용자 권한, 장기 운영 기능을 새로 완성하지 않는다.
-- 현재 구현 중 Java에 필요 없는 runtime은 계약 추출 후 삭제한다.
-- Python 코드를 Java로 줄 단위 번역하지 않는다.
-- 저장소 이름과 GitHub URL은 `k8s-clue`로 유지한다.
-- 제품 표시명과 목표 CLI는 Clue로 통일한다. 현재 package·chart와 저장·통신 식별자의 호환 경계는 [README](../README.md#명칭과-호환-범위)를 따른다.
-- 아래 새 CLI·module·prefix는 앞으로의 구현 목표다. 기존 암호화·서명·identity·metric·환경변수 계약을 명칭 치환만으로 이전하지 않는다.
-
-## Python 저장소의 최종 결과
-
-```text
-clue diagnose
-→ kubeconfig에서 context 확인
-→ Kubernetes API read-only 조회
-→ Evidence Bundle 생성
-→ deterministic Analyzer 실행
-→ Rule ID와 Evidence 출력
-→ 필요하면 Remediation Plan 생성
-→ 허용된 변경만 Draft PR로 제안
-→ 새 Evidence로 Recovery Check
-```
-
-필수 외부 구성요소:
-
-```text
-없음
-```
-
-필수 로컬 입력:
-
-```text
-kubeconfig
-Kubernetes API 접근 권한
-```
-
-Python 최종 범위에서 제외:
-
-```text
-Hub
-Fleet
-사용자 가입
-RBAC 관리 UI
-장기 PostgreSQL 저장
-Agent enrollment
-Prometheus 필수 연동
-NATS
-Redis
-웹 Console
-외부 AI 필수 사용
-```
-
-## 현재 기준선
-
-현재 구조:
-
-- Python 3.13
-- FastAPI
-- SQLAlchemy
-- PostgreSQL
-- Alembic
-- NATS
-- Redis dependency
-- 15개 service/worker
-- React frontend
-- Helm control-plane chart
-- cluster-agent
-- GitHub Draft PR
-- ImagePullBackOff Golden Path
-
-현재 검증 기준:
-
-```text
-backend 203 tests
-frontend typecheck/lint/test/build
-Helm lint/template
-in-process/NATS equivalence
-Alembic single head
-ImagePullBackOff demo
-```
-
-P0에서 이 결과를 다시 기록한다. 이후 삭제 단계마다 기준선을 줄인다.
-
-## 남길 기능
-
-### Kubernetes Evidence
-
-- kubeconfig context 선택
-- namespace 범위 선택
-- Pod 상태
-- Deployment/ReplicaSet owner 관계
-- Kubernetes Event
-- container current state
-- container last termination state
-- restart count
-- rollout condition
-- Service와 EndpointSlice 관계
-- PVC 상태
-- HPA condition
-- observed-at
-- resourceVersion
-- resource UID
-
-### Analyzer
-
-- versioned Rule ID
-- deterministic result
-- Evidence reference
-- confidence class
-- `insufficient_evidence`
-- unsupported result
-- false-positive regression fixture
-
-### Incident
-
-- cluster UID
-- namespace
-- workload UID
-- Analyzer ID
-- symptom identity
-- occurrence
-- opened/resolved lifecycle
-
-### Remediation
-
-- repository
-- branch
-- manifest path
-- base SHA
-- source digest
-- 변경 전 값
-- 제안 값
-- 허용 field
-- inverse patch
-- dry-run result
-- Draft PR only
-
-### Recovery
-
-- 변경 전 Evidence baseline
-- Recovery Check 시작 시각
-- 변경 후 새 Evidence window
-- 동일 resource identity
-- 안정 구간
-- resolved/failed/insufficient 결과
-
-## Java로 넘길 계약
-
-파일 형식은 JSON Schema와 JSON fixture로 고정한다.
-
-| 계약 | 필수 내용 |
+| 항목 | 값 |
 |---|---|
-| Evidence Bundle | schema version, resource identity, observed-at, normalized evidence |
-| Finding | Analyzer ID/version, cause, confidence, Evidence reference |
-| Incident | identity, occurrence, lifecycle |
-| Remediation Plan | authority, target, before/after, risk, dry-run |
-| Draft PR Result | repository, base SHA, PR identity, failure reason |
-| Recovery Check | baseline, new window, stability, result |
-| RBAC Contract | resource, verb, forbidden subresource |
-| Reason Codes | stable code, meaning, retry class |
+| 상태 | 결정 |
+| 관련 작업 | [초기 실행과 표시 오류 수정](https://github.com/woonyong-choi/k8s-clue/issues/2) |
 
-Java에 넘기지 않는 항목:
+## 요약
 
-- Python class 이름
-- Python module 이름
-- FastAPI route 구조
-- SQLAlchemy entity 구조
-- Alembic revision history
-- worker 이름
-- NATS subject 이름
-- 현재 DB table 이름
-- 현재 frontend component 구조
+Clue를 Python으로 완성한다. 로컬 Docker와 kind에서 장애 증거 수집, 원인 판정, 실제 GitHub Draft PR, 사람의 검토와 배포, 회복 확인을 한 사건으로 연결한다. EKS와 Java 이전은 완료 조건에 포함하지 않는다.
 
-## 목표 디렉터리
+## 동기
 
-```text
-src/clue/
-├── cli/
-│   ├── main.py
-│   ├── commands/
-│   │   ├── diagnose.py
-│   │   ├── rules.py
-│   │   ├── evidence.py
-│   │   ├── remediate.py
-│   │   └── recover.py
-│   └── renderers/
-│       ├── text.py
-│       └── json.py
-├── domain/
-│   ├── evidence/
-│   ├── analysis/
-│   ├── incident/
-│   ├── remediation/
-│   └── recovery/
-├── application/
-│   ├── diagnose.py
-│   ├── plan_remediation.py
-│   └── check_recovery.py
-├── adapters/
-│   ├── kubernetes/
-│   ├── git/
-│   ├── github/
-│   └── filesystem/
-└── rules/
-    ├── image_pull/
-    ├── crash_loop/
-    ├── scheduling/
-    ├── memory/
-    └── rollout/
-tests/
-├── unit/
-├── contract/
-├── golden/
-├── e2e/
-└── fixtures/
-handoff/
-├── schemas/
-├── fixtures/
-├── expected-results/
-├── rules/
-├── rbac/
-└── compatibility-matrix.md
-```
+현재 저장소에는 수집, 규칙 엔진, 제한된 패치, Draft PR, 회복 검증과 저장 계층이 있다. 컴포넌트 계약 검증과 실제 외부 연동의 완료 범위는 다르다. 기존 코드를 다른 언어로 넘기기 위해 줄이는 대신, Python 실행 경로를 연결하고 실패 조건을 검증한다.
 
-## 현재 경로 처리표
+## 예시
 
-### 이동 후 유지
+### ImagePullBackOff 진단과 회복
 
-| 현재 경로 | 목표 경로 | 처리 |
+1. 사용자가 kind에 잘못된 이미지 태그를 가진 Deployment를 배포한다.
+2. 에이전트가 Pod와 Event를 읽고 출처와 관측 시각이 포함된 증거를 보낸다.
+3. Clue가 원인과 부족한 증거를 기록하고 허용된 수정 후보를 만든다.
+4. 사용자가 후보를 선택하면 Clue가 고정된 base SHA와 허용 필드에 한정한 GitHub Draft PR을 만든다.
+5. 사용자가 PR을 검토하고 병합한 커밋을 로컬 클러스터에 배포한다.
+6. Clue가 배포 이후 증거를 다시 수집하고 회복 여부를 기록한다.
+
+증거가 부족하거나 저장소 원문이 승인한 상태와 다르면 PR 생성을 중단한다. PR 병합, 배포, 회복 확인은 서로 다른 결과로 기록한다.
+
+## 상세 설계
+
+### 저장소와 실행 경로
+
+이 저장소가 Python 구현과 설치 산출물의 정본이다. 팀 과제 원본과 개인 확장의 구분은 [기여 범위](personal-extension.md)에 유지한다. 소스와 서비스 책임은 [Project Map](PROJECT-MAP.md)을 따른다.
+
+| 구성 | 현재 경로와 보존 이유 |
+|---|---|
+| Controller | `src/entrypoints/app.py`가 gateway와 worker를 한 프로세스로 조합 |
+| Agent | `src/services/target/cluster-agent/`가 대상 Kubernetes 증거 수집 |
+| Gateway | 인증, 증거 접수, RCA와 복구 계획 조회, GitHub webhook 처리 |
+| PostgreSQL | 증거, outbox, 처리 원장, 복구 상태와 카탈로그 보존 |
+| Redis | gateway의 세션 저장과 요청 한도 처리, 연결 장애 시 인증 거부 |
+| Event bus | `inprocess`와 NATS 모드 유지. 영속 처리 검증은 NATS JetStream 경로를 대상으로 수행 |
+| Console | 사건 목록과 진단·수정안 조회 |
+| Helm과 migration | 설치, 읽기 전용 RBAC, 저장 데이터 호환성 유지 |
+
+`uv run python src/entrypoints/app.py --check`는 서비스 발견과 진입점 구성을 검사한다. DB, Redis, NATS, GitHub와 실제 통신을 완료했다는 의미는 아니다. `clue diagnose`는 아직 구현되지 않았으며 기존 Controller와 별개의 CLI 재구성을 완료 전제로 두지 않는다.
+
+### 로컬 검증 환경
+
+개발 중에는 Docker Compose로 의존 서비스를 실행하고 kind에 대상 API와 에이전트를 배포한다. 최종 설치 검증은 Clue도 컨테이너로 패키징해 kind에 설치한다. 현재 `docker-compose.catalog.yml`은 카탈로그 PostgreSQL만 실행한다. Helm chart는 Controller Pod 안의 Redis에 `redis://127.0.0.1:6379/0`으로 연결한다. Redis 포트는 Pod 밖으로 공개하지 않으며 Controller replica는 하나로 제한한다. Redis가 재시작되면 세션과 요청 한도 기록은 사라져 다시 로그인해야 한다. 업무 증거와 복구 상태는 PostgreSQL에 보존한다. 이 구성의 실제 kind 설치 검증은 별도로 수행한다.
+
+단일 노드 kind에서 시작한다. 스케줄링 장애 실험에 필요한 경우 로컬 노드를 늘린다. GitHub 연동에는 인터넷과 저장소 권한이 필요하다. AWS IAM, EBS, ALB와 여러 물리 서버의 장애 대응은 검증 범위에 포함하지 않는다.
+
+### 코드 정리 기준
+
+`make setup`은 환경 예제와 Python 의존성을 준비한다. 저장소에 설정이 없는 pre-commit과 import-linter 의존성 및 자동 hook 설치는 제거한다. 기존 `commit-msg` hook이 참조하는 스크립트 경로는 유지하며 `type(scope): 한글 설명`을 검사한다. 이전에 별도로 설치한 pre-commit hook은 사용자가 유지 여부를 판단하고 직접 관리한다. 코드 검사는 `make gate`를 기준으로 한다.
+
+호출자, 동적 로딩, 설정, 테스트가 모두 없는 코드만 삭제한다. 단순 이름 검색 결과만으로 SQLAlchemy 모델, 자동 발견되는 Repository, 등록 데코레이터를 삭제하지 않는다. 테스트 fixture와 외부 서비스를 대체하는 테스트용 구현은 유지한다.
+
+인증과 변경 권한을 검사하는 코드, 영속 데이터와 migration, 기존 이벤트와 서명 식별자는 보존한다. `kyro`와 `KYRO` 이름은 저장·통신 호환 계약이므로 일괄 치환하지 않는다. 삭제한 코드는 Git 이력으로 복구한다.
+
+### 작업 순서
+
+| 순서 | 작업 | 완료 증거 |
 |---|---|---|
-| `src/services/target/cluster-agent/evidence/collector.py` | `src/clue/adapters/kubernetes/collector.py` | Hub lease 제거, local call 유지 |
-| `src/services/target/cluster-agent/providers/` | `src/clue/adapters/kubernetes/` | read-only provider만 유지 |
-| `src/services/ai/agent/pipeline/causes.py` | `src/clue/rules/` | Rule ID와 fixture 분리 |
-| `src/packages/ai/rule_catalog.py` | `src/clue/domain/analysis/` | framework 의존 제거 |
-| `src/domains/rca/` | `src/clue/domain/incident/`, `analysis/`, `recovery/` | ORM과 router 분리 |
-| `src/domains/gitops/source_patch.py` | `src/clue/domain/remediation/` | allowlist 유지 |
-| `src/services/gitops/scm-worker/github_provider.py` | `src/clue/adapters/github/` | worker wrapper 제거 |
-| `src/domains/rca/recovery_verification.py` | `src/clue/domain/recovery/` | clock 주입 |
+| 1 | Python 제품 기준과 현재 코드 정리 | 실행 기준선, 재현된 오류의 회귀 검증, 삭제 근거 |
+| 2 | ImagePullBackOff 전체 연결 | 실제 증거, Draft PR, 배포 커밋, 회복 결과의 연결 |
+| 3 | 수집 누락, 중복, 재시작과 자원 한도 보강 | 부분 수집 표시, 중복 PR 방지, 재시작 후 처리 재개, 큐와 메모리 한도 |
+| 4 | 여섯 장애군과 독립 평가 데이터 | 장애 주입 조건, 정답 근거, 오진과 판단 유보 기록 |
+| 5 | API 부하, 설치 산출물과 사용 문서 | 요청 지표, 장애 전후 비교, 깨끗한 환경에서 재현 가능한 설치 |
 
-### 계약 추출 후 삭제
+여섯 장애군은 이미지 가져오기 실패, 반복 종료, OOM, probe 실패, Pending, Service 연결 실패다. 각 장애군의 진단, PR 생성, 회복 확인 지원 여부를 따로 표시한다. 원인을 알 수 없는 애플리케이션 오류에는 임의의 YAML 수정을 제안하지 않는다.
 
-| 경로 | 추출할 내용 | 삭제 조건 |
-|---|---|---|
-| `frontend/` | Incident view model | expected JSON 생성 후 |
-| `src/services/gateway/` | 인증·권한 요구사항 | Java security 문서 반영 후 |
-| `src/services/projection/` | failure reason과 audit field | schema 반영 후 |
-| `src/services/ai/*-worker/` | 단계별 입력·출력 | application service test 대체 후 |
-| `src/services/gitops/safe-pr-worker/` | safe PR precondition | contract test 대체 후 |
-| `src/services/gitops/scm-worker/app.py` | SCM request/result | adapter test 대체 후 |
-| `src/packages/events/` | correlation/causation 최소 필드 | protocol schema 반영 후 |
-| `src/packages/contracts/event_bus/` | event payload field | Handoff schema 반영 후 |
-| `src/packages/runtime/` | idempotency/retry rule | direct application test 반영 후 |
-| `src/packages/storage/` | persistent field | schema 목록 작성 후 |
-| `src/domains/identity/` | 역할 요구사항 | Java 계획 반영 후 |
-| `src/domains/timeline/` | Incident chronology field | Incident schema 반영 후 |
-| `src/domains/alert/` | 외부 alert identity | Analyzer input 문서 반영 후 |
-| `src/domains/target/` | cluster identity와 enrollment field | protocol 문서 반영 후 |
-| `alembic/`, `alembic.ini` | 최종 schema field 목록 | JSON schema 확정 후 |
-| `charts/clue/` | read-only RBAC | `handoff/rbac` 생성 후 |
-| `src/entrypoints/app.py` | active service list | CLI entrypoint 전환 후 |
-| `src/entrypoints/bootstrap*.py` | bootstrap requirement | Python DB 제거 후 |
+RCA 카탈로그에서 역산한 합성 데이터는 후보 도달 여부를 확인하는 데 쓴다. 실제 정확도 평가는 별도로 장애를 주입하고 보관한 증거로 수행한다. [기존 평가 결과](../evals/results.md)의 범위를 확대 해석하지 않는다.
 
-### 삭제 대상 script
+### 데모와 회귀 검증
 
-| 경로 | 삭제 시점 |
+`make demo`는 계약 테스트를 실행한다. `DEMO_KIND_CONTEXT`를 설정하면 별도 kind 재현 장면을 먼저 실행한다. 이 장면의 실제 증거가 뒤의 계약 테스트와 연결된 것은 아니다. `DEMO_SKIP_PR=0`은 구현하지 않은 실제 PR 실행을 요청하므로 장면 실행 전에 오류로 종료한다. 토큰을 추가해도 실제 PR 검증으로 바뀌지 않는다.
+
+Frontend는 API 응답의 표시 필드와 목록 원소를 검증한다. 잘못된 응답은 오류 상태로 표시하며 사건 행을 조용히 제외하지 않는다. 선택되지 않은 첫 후보를 선택된 수정안으로 표시하지 않는다.
+
+### 요구사항
+
+| 요구사항 | 검증 계획 |
 |---|---|
-| `scripts/test-event-bus-equivalence.sh` | NATS 제거 단계 |
-| `scripts/event_bus_equivalence.py` | NATS 제거 단계 |
-| `scripts/services.py` | worker/service discovery 제거 단계 |
-| full control-plane용 manifest 검사 | Helm runtime 제거 단계 |
-| frontend gate | frontend 제거 단계 |
-
-### 유지할 script
-
-- lint
-- unit test
-- contract test
-- golden fixture test
-- kind diagnose E2E
-- release artifact 검사
-- 브랜드 검사
-- Secret 비수집 검사
-
-## dependency 처리표
-
-| dependency | 처리 |
-|---|---|
-| `fastapi` | gateway 삭제 후 제거 |
-| `uvicorn` | gateway/demo server 삭제 후 제거 |
-| `sqlalchemy` | repository fixture 전환 후 제거 |
-| `alembic` | migration 제거 후 제거 |
-| `psycopg` | PostgreSQL runtime 제거 후 제거 |
-| `nats-py` | direct application flow 전환 후 제거 |
-| `redis` | active import 확인 후 제거 |
-| `greenlet` | SQLAlchemy 제거 후 제거 |
-| `opentelemetry-exporter-*` | CLI 필수 경로에서 제거 |
-| `pyjwt` | 웹 인증 제거 후 필요성 재검사 |
-| `cryptography` | GitHub/credential contract에 필요한지 재검사 |
-| `httpx` | Kubernetes/GitHub adapter 사용 여부에 따라 유지 |
-| `pyyaml` | rule과 manifest 처리에 유지 |
-
-Python CLI parser는 표준 `argparse`를 우선 사용한다. CLI framework dependency는 completion과 subcommand 유지 비용을 확인한 뒤 추가한다.
-
-## P0. 기준선 고정
-
-### 작업
-
-- [ ] clean worktree 확인
-- [ ] 현재 commit SHA 기록
-- [ ] `make gate` 실행
-- [ ] `make event-bus-equivalence` 실행
-- [ ] `make demo` 실행
-- [ ] 전체 test 수와 실행 시간 기록
-- [ ] frontend bundle 결과 기록
-- [ ] Helm object 수 기록
-- [ ] Alembic head 기록
-- [ ] service inventory JSON 생성
-- [ ] dependency inventory 생성
-- [ ] active entrypoint 목록 생성
-- [ ] 제거 후보별 보호 test 연결
-
-### 산출물
-
-```text
-docs/baseline/current-runtime.md
-handoff/baseline/test-results.json
-handoff/baseline/services.json
-handoff/baseline/dependencies.json
-```
-
-### 완료 조건
-
-- [ ] 현재 결과를 한 명령으로 재현
-- [ ] 실패한 baseline은 실패 상태와 원인 기록
-- [ ] 삭제 전 비교 자료 확보
-
-## P1. Clue 명칭과 CLI entrypoint
-
-### 명칭 변경
-
-- [x] 제품 표시 `Clue`
-- [ ] CLI `clue`
-- [x] Python project `k8s-clue`
-- [x] chart directory `charts/clue`
-- [x] 로컬 image 이름 `clue` (원격 게시 아님)
-- [ ] 향후 environment prefix `CLUE_`: 현재 참조 구현의 `KYRO_`는 호환 유지
-- [ ] 향후 metric prefix `clue_`: 현재 참조 구현의 `kyro_`는 호환 유지
-- [ ] label/annotation prefix는 소유한 DNS 기준으로 확정
-- [x] PostgreSQL 기본 database/user는 기존 설치와 호환되도록 `kyro` 유지
-- [x] frontend package `clue-console`
-- [ ] 기존 제품명 평문·파일명 검사
-
-### CLI 생성
-
-`pyproject.toml`:
-
-```toml
-[project.scripts]
-clue = "clue.cli.main:main"
-```
-
-명령:
-
-```bash
-clue version
-clue diagnose --help
-clue rules list
-```
-
-### exit code
-
-| code | 의미 |
-|---|---|
-| 0 | 진단 완료, critical finding 없음 |
-| 1 | 진단 완료, warning/critical finding 있음 |
-| 2 | CLI 입력 오류 |
-| 3 | Kubernetes 인증·권한 오류 |
-| 4 | Evidence 수집 실패 |
-| 5 | 내부 오류 |
-
-### 완료 조건
-
-- [ ] 저장소명 `k8s-clue` 유지
-- [ ] 제품 명칭 Clue 통일
-- [ ] CLI help snapshot test
-- [ ] text/json output 계약 생성
-
-## P2. 설치 없는 진단
-
-### 조회 순서
-
-1. kubeconfig 로드
-2. context 결정
-3. API server 연결 확인
-4. read permission 확인
-5. namespace와 target 결정
-6. allowlisted resource 조회
-7. Evidence normalization
-8. Analyzer 실행
-9. Finding 정렬
-10. text/json 출력
-
-### target 선택
-
-```bash
-clue diagnose
-clue diagnose --context dev
-clue diagnose --namespace payments
-clue diagnose deployment/card-api
-clue diagnose pod/card-api-abc
-clue diagnose --all-contexts
-```
-
-### 보안 조건
-
-- [ ] Secret API 호출 없음
-- [ ] create/update/patch/delete 없음
-- [ ] exec/attach/port-forward/proxy 없음
-- [ ] 출력에 kubeconfig token 없음
-- [ ] 오류 출력에 Authorization header 없음
-
-### 첫 Analyzer
-
-```text
-CLUE-IMAGE-001 IMAGE_TAG_NOT_FOUND
-CLUE-IMAGE-002 IMAGE_PULL_UNAUTHORIZED
-CLUE-IMAGE-003 REGISTRY_UNAVAILABLE
-CLUE-IMAGE-099 INSUFFICIENT_IMAGE_EVIDENCE
-```
-
-### 완료 조건
-
-- [ ] Agent 없이 동작
-- [ ] DB 없이 동작
-- [ ] NATS 없이 동작
-- [ ] Prometheus 없이 동작
-- [ ] AI 없이 동작
-- [ ] kind ImagePullBackOff E2E
-
-## P3. 순수 domain과 계약 추출
-
-### domain 제약
-
-- [ ] FastAPI import 금지
-- [ ] SQLAlchemy import 금지
-- [ ] NATS import 금지
-- [ ] Kubernetes client import 금지
-- [ ] 현재 시각 직접 호출 금지
-- [ ] UUID 직접 생성 금지
-- [ ] environment 직접 조회 금지
-
-외부 값은 port로 주입한다.
-
-```text
-Clock
-IdGenerator
-EvidenceSource
-IncidentRepository
-ScmProvider
-RuleCatalog
-```
-
-### canonical JSON
-
-- key 정렬 고정
-- UTC RFC3339 timestamp
-- enum은 대문자 stable code
-- 정수와 quantity normalization
-- optional field 누락 규칙 고정
-- unknown optional field 허용 정책 기록
-- schema version 필수
-
-### 동등성 검사
-
-```text
-기존 pipeline input
-→ 기존 result
-
-같은 input
-→ 새 application service
-→ 새 result
-
-semantic diff
-```
-
-비교 필드:
-
-- resource identity
-- Analyzer ID/version
-- cause
-- confidence class
-- Evidence reference set
-- reason code
-- remediation level
-- recovery outcome
-
-### 완료 조건
-
-- [ ] domain-only test command 존재
-- [ ] Golden Path fixture 동등성 통과
-- [ ] schema validation 통과
-
-## P4. runtime 제거
-
-### 삭제 순서
-
-```text
-1. frontend
-2. gateway와 웹 인증
-3. projection
-4. worker wrapper
-5. service discovery
-6. NATS/event bus
-7. outbox/dead-letter runtime
-8. Redis
-9. PostgreSQL/SQLAlchemy
-10. Alembic
-11. Agent enrollment/runtime
-12. control-plane Helm chart
-13. bootstrap entrypoint
-14. 미사용 dependency/test/script
-```
-
-### 각 삭제 commit 절차
-
-1. 대체 fixture 추가
-2. 대체 contract test 추가
-3. 새 direct path로 entrypoint 전환
-4. 기존 path import 차단 test 추가
-5. 대상 코드 삭제
-6. dependency 삭제
-7. 문서 링크 삭제
-8. 전체 gate 실행
-
-### 삭제 금지
-
-- 계약 추출 전 migration 삭제 금지
-- expected result 생성 전 worker 삭제 금지
-- RBAC fixture 생성 전 chart 삭제 금지
-- view model 추출 전 frontend 삭제 금지
-- recovery fixture 생성 전 persistence model 삭제 금지
-
-### 완료 조건
-
-- [ ] active worker process 0
-- [ ] NATS import 0
-- [ ] Redis import 0
-- [ ] FastAPI import 0
-- [ ] SQLAlchemy import 0
-- [ ] Alembic file 0
-- [ ] frontend build dependency 0
-- [ ] Python control-plane Helm resource 0
-- [ ] CLI test는 외부 service 없이 실행
-
-## P5. P0 Analyzer와 수정 계약
-
-### Analyzer
-
-| Rule group | 필수 case |
-|---|---|
-| Image pull | tag 없음, 인증 실패, registry 장애 |
-| Crash loop | non-zero exit, probe failure, config error |
-| Scheduling | resource 부족, selector 불일치, taint |
-| Memory | OOMKilled, memory limit 근접 |
-| Rollout | progress deadline, unavailable replica |
-
-### fixture 수
-
-각 rule마다 최소:
-
-- positive 2개
-- negative 2개
-- insufficient 1개
-- malformed input 1개
-- Kubernetes version variation 1개
-
-### Remediation
-
-- [ ] Explain
-- [ ] Suggest
-- [ ] Draft PR
-- [ ] Apply 없음
-- [ ] Secret 생성 없음
-- [ ] RBAC 확대 없음
-- [ ] NetworkPolicy 완화 없음
-- [ ] base SHA 재확인
-- [ ] target scalar 재확인
-- [ ] inverse patch
-
-### Recovery
-
-- [ ] stale window 거부
-- [ ] duplicate window 무시
-- [ ] 다른 UID 거부
-- [ ] baseline 없음 실패
-- [ ] stability window 충족
-- [ ] 재발 시 실패
-
-## P6. Handoff Pack
-
-### 디렉터리
-
-```text
-handoff/python-handoff-v1/
-├── manifest.json
-├── schemas/
-├── fixtures/
-├── expected-results/
-├── rules/
-├── rbac/
-├── reason-codes.json
-├── compatibility-matrix.md
-├── provenance.md
-└── checksums.txt
-```
-
-### manifest
-
-```json
-{
-  "handoffVersion": "1",
-  "pythonReferenceVersion": "...",
-  "gitCommit": "...",
-  "kubernetesVersions": ["..."],
-  "schemaVersions": {},
-  "ruleVersions": {},
-  "generatedAt": "..."
-}
-```
-
-### 생성 명령 목표
-
-```bash
-make handoff
-make handoff-verify
-```
-
-### release
-
-```text
-tag: python-handoff-v1
-artifact: clue-python-handoff-v1.tar.gz
-checksum: SHA-256
-```
-
-## Handoff Gate
-
-- [ ] `clue diagnose`가 외부 service 없이 실행된다.
-- [ ] P0 Analyzer fixture가 모두 통과한다.
-- [ ] schema가 versioned 상태다.
-- [ ] expected result가 canonical JSON이다.
-- [ ] Secret 비수집 검사가 통과한다.
-- [ ] read-only RBAC가 fixture로 남아 있다.
-- [ ] Draft PR safety fixture가 통과한다.
-- [ ] Recovery Check fixture가 통과한다.
-- [ ] Python 결과를 한 명령으로 생성한다.
-- [ ] 삭제 대상 runtime import가 0이다.
-- [ ] 문서, Rule ID, command 이름이 일치한다.
-- [ ] license와 NOTICE가 정리됐다.
-- [ ] handoff artifact checksum이 검증됐다.
-- [ ] `python-handoff-v1` tag가 있다.
-
-## test 재분류
-
-### contract/golden으로 유지
-
-- `test_golden_path_safety_contracts.py`
-- `test_incident_signal_identity.py`
-- `test_recovery_gitops_authority.py`
-- `test_recovery_kustomize_edit_source.py`
-- `test_recovery_merge_scope.py`
-- `test_recovery_pr_lifecycle.py`
-- `test_recovery_safe_pr_copy.py`
-- `test_recovery_selection_preflight.py`
-- `test_recovery_verification.py`
-- `test_safe_pr_structured_base_advance.py`
-
-파일명은 새 domain 기준으로 변경한다. DB·worker fixture는 JSON fixture로 바꾼다.
-
-### 요구사항만 추출하고 삭제
-
-- API gateway route test
-- session/admin test
-- GitHub App uninstall UI flow test
-- management guard runtime test
-- Alertmanager webhook server test
-- timeline projection query test
-- DB repository filter test
-- event bus equivalence test
-- migration head test
-- frontend component test
-
-삭제 전에 필요한 reason code, identity와 payload field가 contract fixture에 포함됐는지 확인한다.
-
-## 최종 gate
-
-```bash
-make lint
-make test
-make contract-test
-make golden-test
-make diagnose-e2e
-make security-contract-test
-make handoff-verify
-make brand-check
-```
-
-최종 gate에서 제외:
-
-```text
-frontend build
-NATS equivalence
-Alembic head
-full control-plane Helm lint
-PostgreSQL integration
-gateway API E2E
-```
-
-## commit 순서
-
-```text
-1. baseline
-2. naming
-3. CLI shell
-4. ImagePullBackOff direct diagnose
-5. schema/fixture
-6. pure domain
-7. frontend 제거
-8. gateway 제거
-9. worker/event bus 제거
-10. DB/migration 제거
-11. Agent/control-plane 제거
-12. P0 Analyzer
-13. remediation/recovery contract
-14. Handoff Pack
-15. python-handoff-v1
-```
-
-한 commit에서 하지 않는 조합:
-
-- 이동과 로직 변경
-- 대규모 삭제와 포맷 변경
-- schema 변경과 expected result 무근거 변경
-- dependency 삭제와 unrelated refactor
-- naming 변경과 behavior 변경
-
-## 완료
-
-완료 상태:
-
-```text
-k8s-clue = 실행 가능한 Python Clue 명세
-Clue = Java 포팅 대기
-```
-
-Java 작업 시작 조건:
-
-```text
-P6 완료
-Handoff Gate 전체 통과
-python-handoff-v1 발행
-```
+| 기존 서비스 구성을 유지한다. | `src/entrypoints/app.py --check`와 `tests/test_controller_composition.py` |
+| 허용 범위 밖 변경과 자동 병합을 거부한다. | [Golden Path 안전 계약](GOLDEN-PATH.md)의 회귀 테스트 |
+| 잘못된 화면 입력이 렌더링 오류나 사건 누락으로 이어지지 않는다. | `frontend/src/api.test.ts`의 응답 검증과 실제 화면 확인 |
+| 미구현 live PR 데모를 성공으로 출력하지 않는다. | `tests/test_demo_mode.py` |
+| 실제 ImagePullBackOff부터 회복까지 연결한다. | 실제 수집 증거, GitHub PR, 배포 커밋과 회복 기록 대조 |
+| 장애 중 재시작과 중복 전달을 견딘다. | DB 저장, 이벤트 발행, GitHub 응답 사이 프로세스 종료 실험 |
+| 새 DB 초기화가 삭제된 기능의 테이블을 요구하지 않는다. | `tests/test_database_bootstrap.py`의 초기화, 재실행과 스키마 확인 |
+| 기본 설치가 loopback Redis를 인증 저장소로 사용한다. | `tests/test_chart_sessions.py`와 실제 로그인, 조회, 만료 확인 |
+| 클라우드 계정 없이 전체 설치와 부하 실험을 재현한다. | Docker와 kind의 새 설치, API 요청 지표와 자원 제한 기록 |

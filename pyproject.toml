@@ -24,9 +24,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.13.1",
     "hypothesis>=6.112",
-    "import-linter>=2.0",
-    "pre-commit>=4.6.0",
     "pytest>=8.4.0",
     "ruff>=0.12.0",
 ]

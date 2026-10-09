@@ -4,16 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-# ── 데모 플래그 ────────────────────────────────────────────────────────────
-# DEMO_SKIP_PR=1 (기본): 실제 GitHub Draft PR을 만들지 않는다. Draft PR 장면은
-#   계약 테스트(모킹된 GitOps 경로)만 실행한다. 토큰 없이 CI에서 돌리기 위한 값.
-# DEMO_SKIP_PR=0: 실제 PR을 만들려는 의도이므로 GITHUB_TOKEN을 요구한다.
-# DEMO_DRY_RUN=1: 하위 호환 별칭 (make demo DEMO_DRY_RUN=1).
-DEMO_DRY_RUN="${DEMO_DRY_RUN:-}"
-if [[ "${DEMO_DRY_RUN}" == "1" ]]; then
-  DEMO_SKIP_PR="${DEMO_SKIP_PR:-1}"
+# 실제 PR 생성 경로가 연결되기 전에는 토큰이나 클러스터에 접근하지 않는다.
+if [[ "${DEMO_SKIP_PR:-1}" != "1" ]]; then
+  echo "[demo][error] live Draft PR creation is not implemented; use DEMO_SKIP_PR=1 for contract tests" >&2
+  exit 1
 fi
-DEMO_SKIP_PR="${DEMO_SKIP_PR:-1}"
 
 # DEMO_KIND_CONTEXT: 비어 있지 않으면 해당 kubectl context에서 실제 kind 장면을
 #   실행한다. 비어 있으면 kind 장면을 건너뛴다(로컬 pytest 전용 실행).
@@ -104,15 +99,7 @@ uv run pytest -q \
   tests/test_alertmanager_alert_event.py \
   tests/test_recovery_gitops_authority.py
 
-if [[ "${DEMO_SKIP_PR}" == "1" ]]; then
-  scene "base-SHA-pinned GitOps Draft PR (contract only, no live PR)"
-else
-  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    echo "[demo][error] DEMO_SKIP_PR=0 requires GITHUB_TOKEN for live Draft PR creation" >&2
-    exit 1
-  fi
-  scene "base-SHA-pinned GitOps Draft PR"
-fi
+scene "base-SHA-pinned GitOps Draft PR (contract only, no live PR)"
 uv run pytest -q \
   tests/test_recovery_pr_lifecycle.py \
   tests/test_safe_pr_structured_base_advance.py

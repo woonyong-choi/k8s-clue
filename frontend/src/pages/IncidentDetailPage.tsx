@@ -33,7 +33,7 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
 
   const selected = bundle.remediation?.candidates.find(
     (candidate) => candidate.action_id === bundle.remediation?.selected_action_id,
-  ) ?? bundle.remediation?.candidates[0] ?? null;
+  ) ?? null;
 
   return (
     <section className="page detail-page">
@@ -105,6 +105,10 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
                 <span>{selected.rollback_plan}</span>
               </div>
             </>
+          ) : bundle.remediation?.selected_action_id ? (
+            <p>선택된 수정안을 찾지 못했습니다. 저장된 후보와 선택 상태를 확인해야 합니다.</p>
+          ) : bundle.remediation && bundle.remediation.candidates.length > 0 ? (
+            <p>수정 후보 {bundle.remediation.candidates.length}개가 있으나 아직 선택되지 않았습니다.</p>
           ) : (
             <p>허용 범위 안에서 만들 수 있는 수정안이 없습니다. 자동 변경 없이 evidence를 보존합니다.</p>
           )}

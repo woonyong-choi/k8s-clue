@@ -4,7 +4,7 @@ Kubernetes 장애 증거를 읽기 전용으로 수집하고, 버전이 붙은 �
 
 - 5인 팀의 팀장으로 전체 아키텍처, 이벤트 런타임, 서비스 간 계약, CI와 배포를 맡았습니다. 룰 카탈로그, 에이전트 수집, PR 생성, 게이트웨이 인증은 팀원이 작성했습니다.
 - 클러스터를 직접 변경하거나 PR을 자동 merge하지 않습니다. 증거와 허용 필드를 확인하고, 사람이 검토할 Draft PR까지만 생성합니다.
-- 공개 정리본은 ImagePullBackOff 한 경로를 kind와 계약 테스트 86개로 확인했습니다. 전체 pytest는 294개이며, 외부 클러스터·GitHub App 연동 E2E는 아직 검증하지 않았습니다.
+- 공개 정리본은 kind에서 ImagePullBackOff를 재현하고 관련 계약 테스트 86개를 별도로 확인했습니다. 전체 pytest는 302개이며, 실제 PR부터 배포·회복까지의 전체 연결은 아직 검증하지 않았습니다.
 
 RCA 룰은 합성 입력 116개(장애 87 + 정상 29)에서 가려진 후보 0건·오탐 0건을 기록했습니다. 이 수치는 2026-09-23 로컬 재실행 결과이며 실사용 트래픽 지표가 아닙니다.
 
@@ -15,7 +15,7 @@ RCA 룰은 합성 입력 116개(장애 87 + 정상 29)에서 가려진 후보 0�
 
 ## 데모
 
-`make demo`는 kind 클러스터에서 ImagePullBackOff를 실제로 재현한 뒤, 증거·RCA → base SHA 고정 Draft PR → 배포 후 검증 계약을 순서대로 검사합니다. 실제 GitHub에 PR을 발행하는 E2E는 아닙니다.
+`make demo`는 증거·RCA, base SHA 고정 Draft PR, 배포 후 검증의 계약 테스트를 실행합니다. `DEMO_KIND_CONTEXT`를 설정하면 kind에서 ImagePullBackOff를 재현하는 장면을 먼저 실행합니다. 이 장면의 실제 증거가 뒤의 계약 테스트 입력으로 연결되지는 않으며, 실제 GitHub PR도 발행하지 않습니다.
 
 ![make demo 실행 기록 — kind에서 ErrImagePull 관측 후 계약 테스트 24 + 29 + 27 + 6건 통과](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/demo.gif)
 
@@ -30,10 +30,10 @@ git clone https://github.com/woonyong-choi/k8s-clue.git && cd k8s-clue
 uv sync --all-groups
 make demo          # Golden Path 계약 86개
 make catalog-up && make catalog-schema   # 카탈로그 검사용 PostgreSQL
-make test          # ruff lint + pytest 294개
+make test          # ruff lint + pytest 302개
 ```
 
-`make demo`는 `DEMO_KIND_CONTEXT`가 없으면 kind 장면을 건너뛰고 계약 테스트만 실행합니다. 전체 타깃은 `make help`, 로컬 도구 확인은 `make doctor`로 봅니다.
+`make demo`는 `DEMO_KIND_CONTEXT`가 없으면 kind 장면을 건너뛰고 계약 테스트만 실행합니다. `DEMO_SKIP_PR=0`은 실제 PR 실행이 구현되지 않아 시작 전에 오류로 종료합니다. 전체 타깃은 `make help`, 로컬 도구 확인은 `make doctor`로 봅니다.
 
 ## 구조
 
@@ -46,7 +46,7 @@ src/domains/                         gitops·rca·inventory·datacatalog 도메�
 src/packages/                        event bus · outbox · 처리 원장 · 보안
 charts/clue/                         Helm chart (agent RBAC은 read-only만)
 evals/                               RCA 룰 골든셋과 실측 결과
-tests/                               계약·속성·카탈로그 테스트 294개
+tests/                               계약·속성·카탈로그 테스트 302개
 ```
 
 `uv run python scripts/services.py`가 16개 runtime 서비스를 출력합니다.
@@ -94,10 +94,12 @@ flowchart LR
 
 ## 검증
 
+전체 pytest와 Frontend 검사는 2026-10-10에 다시 실행했습니다. 전용 PostgreSQL 17.11에서 302개가 경고 없이 통과했고, DB 없이 실행하면 265개 통과와 37개 skip입니다. Frontend는 응답 계약과 경로 테스트 18개, typecheck, lint, build를 통과했습니다. 실제 Redis 8.10.2와 HTTP gateway에서 로그인, 조회, 세션 만료, Redis 장애 중 인증 거부와 재연결을 확인했습니다. 아래 kind 데모와 RCA 합성 평가 수치는 2026-09-23 기록입니다.
+
 | 스위트 | 무엇을 증명하나 | 개수 | 실행 명령 |
 |---|---|---:|---|
-| 전체 pytest | lint + 전 계층 회귀 (PostgreSQL 기동 시) | **294 passed** | `make catalog-up && make test` |
-| 전체 pytest (DB 없이) | 카탈로그 36개는 skip | 258 passed, 36 skipped | `make test` |
+| 전체 pytest | lint + 전 계층 회귀 (PostgreSQL 기동 시) | **302 passed** | `make catalog-up && make test` |
+| 전체 pytest (DB 없이) | DB 연동 37개는 skip | 265 passed, 37 skipped | `make test` |
 | demo — 증거·RCA | ImagePullBackOff 증거에서 결정론적 원인이 나오는가 | 24 | `make demo` |
 | demo — Draft PR | base SHA 고정, draft 강제, merge 경로 부재 | 29 | `make demo` |
 | demo — 배포 후 검증 | 기준선 대비 실제 회복 판정, stale window 거부 | 27 | `make demo` |
@@ -113,7 +115,7 @@ CI는 4개 job입니다 — `backend`(`make gate-backend`), `frontend`(`npm run 
 
 ## 범위와 한계
 
-- 완결 검증한 시나리오는 **ImagePullBackOff 하나**입니다. 룰 카탈로그에는 다른 시나리오도 있지만, 지표·로그 임계치가 필요한 경로는 패치 allowlist와 회복 검증 쪽이 막혀 있습니다.
+- 장애 재현과 계약 검사를 기록한 시나리오는 **ImagePullBackOff 하나**입니다. 실제 PR부터 배포·회복까지의 전체 연결은 미검증입니다. 룰 카탈로그에는 다른 시나리오도 있지만, 지표·로그 임계치가 필요한 경로는 패치 allowlist와 회복 검증 쪽이 막혀 있습니다.
 - **실사용 트래픽·복구 시간·처리량·비용은 측정하지 않았습니다.** 외부 클러스터와 GitHub App의 종단 검증도 미완입니다. 현재 보장 범위는 계약 테스트와 kind 재현까지입니다.
 - RCA 골든셋은 카탈로그 YAML을 역산한 **합성 데이터**입니다. accuracy 100%는 실제 장애 정확도가 아니라 "어떤 후보도 가려져 있지 않다"는 뜻입니다.
 - **범위 단위 삭제 기능은 사실상 꺼져 있습니다.** 에이전트가 내보내는 `collection_scopes`를 `collection_coverage`로 투영하는 단계가 연결돼 있지 않아 런타임에서 `inventory_deletion_scopes()`는 항상 빈 튜플을 돌려줍니다. 안전한 쪽(아무것도 지우지 않음)으로 닫히지만 기능은 아직 없습니다 — [design.md의 알려진 한계](docs/design.md#알려진-한계-지금-열려-있는-구멍).
@@ -125,7 +127,7 @@ CI는 4개 job입니다 — `backend`(`make gate-backend`), `frontend`(`npm run 
 - [Golden Path 안전 계약](docs/GOLDEN-PATH.md) — 9개 조항의 코드 강제 지점과 회귀 테스트
 - [팀 과제와 개인 확장의 경계](docs/personal-extension.md) — 커밋 범위, 정리 전후, 기술 스펙
 - 운영 데이터 카탈로그 — [수집 완전성 계약](docs/collection-contract.md) · [메타데이터 카탈로그](docs/metadata-catalog.md) · [품질 검사 SQL](docs/sql-quality-checks.md) · [조회 API](docs/catalog-api.md)
-- [Python 선행 정리 계획](docs/PYTHON-FIRST-PLAN.md) — Java 포팅 인수 조건
+- [Python 제품 완성 계획](docs/PYTHON-FIRST-PLAN.md) — 로컬 Docker·kind 완료 기준과 코드 보존 범위
 - 원본 팀 저장소 — [minmings111/Kyro-jungle-final](https://github.com/minmings111/Kyro-jungle-final) · [팀 발표 영상](https://www.youtube.com/watch?v=Ar4rNJZX7lU)
 - [포트폴리오](https://docs.woonyong.com/projects/) · [CI 실행 기록](https://github.com/woonyong-choi/k8s-clue/actions)
 - [`NOTICE`](NOTICE) — upstream [skyhook-io/radar](https://github.com/skyhook-io/radar) 출처와 재작성 범위 (Apache-2.0)

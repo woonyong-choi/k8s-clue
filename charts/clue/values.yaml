@@ -7,6 +7,10 @@ controller:
   replicas: 1
   resources: {}
 
+redis:
+  image: redis:8.10.2-alpine
+  resources: {}
+
 console:
   image:
     repository: clue-console

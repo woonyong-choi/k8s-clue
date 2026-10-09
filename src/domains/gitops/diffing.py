@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any
 
 JsonObject = dict[str, Any]
-MISSING = "<missing>"
 
 
 @dataclass(frozen=True)
@@ -107,9 +106,3 @@ def _configmap_fields(obj: Mapping[str, Any]) -> JsonObject:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
-
-
-def _value_or_missing(values: Mapping[str, Any] | None, field_path: str) -> Any:
-    if values is None or field_path not in values:
-        return MISSING
-    return values[field_path]
