@@ -4,12 +4,9 @@ import asyncio
 import json
 import logging
 import secrets
-import time
-from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from math import ceil
 from typing import Literal, Protocol, TypeVar, runtime_checkable
 
 from redis.asyncio import Redis as AsyncRedis
@@ -125,148 +122,6 @@ class SessionStore(Protocol):
     async def consume_email_verification_token(
         self, token: str | None
     ) -> dict[str, str] | None: ...
-
-
-class MemorySessionStore:
-    """Single-controller OSS session store; process-local and intentionally non-HA."""
-
-    def __init__(self, config: RedisSessionStoreConfig) -> None:
-        self.config = config
-        self.connected = False
-        self.sessions: dict[str, tuple[float, AuthSession]] = {}
-        self.verifications: dict[str, tuple[float, dict[str, str]]] = {}
-        self.rate_events: dict[str, deque[float]] = defaultdict(deque)
-        self.strikes: dict[str, tuple[float, int]] = {}
-        self.locks: dict[str, float] = {}
-
-    async def connect(self) -> None:
-        self.connected = True
-
-    async def close(self) -> None:
-        self.connected = False
-        self.sessions.clear()
-        self.verifications.clear()
-        self.rate_events.clear()
-        self.strikes.clear()
-        self.locks.clear()
-
-    async def create_session(
-        self,
-        user_id: str,
-        roles: list[str] | None = None,
-        workspace_id: str | None = None,
-        display_name: str | None = None,
-        email: str | None = None,
-        auth_mode: AuthMode = "password",
-    ) -> AuthSession:
-        self._require_connected()
-        token = secrets.token_urlsafe(self.config.token_bytes)
-        session = AuthSession(
-            token=token,
-            user_id=user_id,
-            roles=roles or list(self.config.default_roles),
-            workspace_id=workspace_id or self.config.default_workspace_id,
-            display_name=display_name,
-            email=email,
-            auth_mode=auth_mode,
-        )
-        self.sessions[token] = (time.monotonic() + self.config.ttl_seconds, session)
-        return session
-
-    async def get_session(self, token: str | None) -> AuthSession | None:
-        self._require_connected()
-        if not token:
-            return None
-        stored = self.sessions.get(token)
-        if stored is None:
-            return None
-        expires_at, session = stored
-        if expires_at <= time.monotonic():
-            self.sessions.pop(token, None)
-            return None
-        return session
-
-    async def touch_session(self, token: str | None) -> bool:
-        session = await self.get_session(token)
-        if session is None:
-            return False
-        self.sessions[session.token] = (
-            time.monotonic() + self.config.ttl_seconds,
-            session,
-        )
-        return True
-
-    async def delete_session(self, token: str) -> None:
-        self._require_connected()
-        self.sessions.pop(token, None)
-
-    async def check_rate_limit(
-        self,
-        key: str,
-        limit: int | None = None,
-        window_seconds: int | None = None,
-    ) -> None:
-        self._require_connected()
-        threshold = limit if limit is not None else self.config.rate_limit
-        window = (
-            window_seconds if window_seconds is not None else self.config.rate_limit_window_seconds
-        )
-        now = time.monotonic()
-        events = self.rate_events[key]
-        while events and events[0] <= now - window:
-            events.popleft()
-        if len(events) >= threshold:
-            retry_after = max(1, ceil(events[0] + window - now))
-            raise RateLimitExceeded(retry_after)
-        events.append(now)
-
-    async def check_escalating_rate_limit(
-        self,
-        key: str,
-        limit: int,
-        window_seconds: int,
-        lock_steps_seconds: tuple[int, ...],
-        strike_ttl_seconds: int,
-    ) -> None:
-        self._require_connected()
-        now = time.monotonic()
-        locked_until = self.locks.get(key, 0.0)
-        if locked_until > now:
-            raise RateLimitExceeded(max(1, int(locked_until - now)))
-        try:
-            await self.check_rate_limit(f"escalating:{key}", limit, window_seconds)
-        except RateLimitExceeded:
-            strike_expires_at, strike_count = self.strikes.get(key, (0.0, 0))
-            if strike_expires_at <= now:
-                strike_count = 0
-            strike_count += 1
-            self.strikes[key] = (now + strike_ttl_seconds, strike_count)
-            lock_seconds = lock_steps_seconds[min(strike_count, len(lock_steps_seconds)) - 1]
-            self.locks[key] = now + lock_seconds
-            raise RateLimitExceeded(lock_seconds) from None
-
-    async def create_email_verification_token(self, user_id: str, email: str) -> str:
-        self._require_connected()
-        token = secrets.token_urlsafe(self.config.email_verification_token_bytes)
-        self.verifications[token] = (
-            time.monotonic() + self.config.email_verification_ttl_seconds,
-            {"user_id": user_id, "email": email},
-        )
-        return token
-
-    async def consume_email_verification_token(self, token: str | None) -> dict[str, str] | None:
-        self._require_connected()
-        if not token:
-            return None
-        stored = self.verifications.pop(token, None)
-        if stored is None:
-            return None
-        expires_at, payload = stored
-        return payload if expires_at > time.monotonic() else None
-
-    def _require_connected(self) -> None:
-        if not self.connected:
-            raise RedisSessionStoreNotConnected("memory session store is not connected")
 
 
 class RedisSessionStore:

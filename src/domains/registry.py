@@ -1,9 +1,4 @@
-"""도메인 합성 루트 — 코어 repo + 자동 발견된 도메인 repo 로 Database 구성.
-
-팀원이 domains/<새도메인>/{tables,repo}.py 를 추가하면 자동 포함됨(packages/ 0 수정).
-아직 domains/ 로 이전 전인 도메인(rca·auth·projection)은 임시로 명시 —
-이전되면 _PENDING 에서 빠지고 자동 발견으로 흡수됨.
-"""
+"""도메인 repository와 모델을 자동 발견해 Database를 구성한다."""
 
 from __future__ import annotations
 
@@ -40,7 +35,7 @@ def _domain_modules(suffix: str) -> list[ModuleType]:
 
 
 def load_domain_tables() -> None:
-    """domains/*/tables.py 임포트 → Base.metadata 에 자동 등록."""
+    """domains/*/models.py 임포트 → Base.metadata 에 자동 등록."""
     _domain_modules("models")
 
 
@@ -53,17 +48,8 @@ def load_domain_events() -> None:
     _domain_modules("events")
 
 
-def load_domain_tools() -> None:
-    """domains/*/tools.py 임포트 → @ai.tool 데코레이터가 ToolRegistry 에 자동 등록.
-
-    LLM 도구가 필요한 서비스(chat-worker 등)가 부팅 시 호출.
-    새 도메인 도구는 tools.py 생성만으로 레지스트리에 포함됨.
-    """
-    _domain_modules("tools")
-
-
 def _discovered_repositories() -> tuple[type, ...]:
-    """domains/*/repo.py 에서 정의된 DatabaseConnection 하위 repo 수집."""
+    """domains/*/repository.py 에서 정의된 DatabaseConnection 하위 repo 수집."""
     found: list[type] = []
     for mod in _domain_modules("repository"):
         for obj in vars(mod).values():
@@ -81,7 +67,7 @@ _CORE = (EventRepository, DeadLetterRepository, OutboxRepository)
 # 모든 도메인 repo 는 domains/ 에서 자동 발견됨.
 
 if TYPE_CHECKING:
-    # 타입 검사용 스텁 — 코어+pending repo 계약을 선언(런타임엔 아래 type() 이
+    # 타입 검사용 스텁 — 명시한 repository 계약을 선언(런타임엔 아래 type() 이
     # 도메인 repo 까지 동적 합성). Database store 메서드 타입체커 인식용.
     class Database(  # noqa: D101
         EventRepository,

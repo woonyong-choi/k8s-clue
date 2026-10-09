@@ -14,7 +14,6 @@ from typing import Any
 
 from uvicorn import Config, Server
 
-from packages.config.constants import Auth
 from packages.config.settings import env
 from packages.contracts.event_bus.interfaces import (
     EventConsumerMetrics,
@@ -22,16 +21,11 @@ from packages.contracts.event_bus.interfaces import (
     EventSubscription,
     JsonObject,
 )
-from packages.contracts.identity import DEFAULT_WORKSPACE_ID, ServiceRole
 from packages.events.bus import NatsEventBus
 from packages.events.in_memory import InMemoryEventBus
 from packages.runtime.app import App
 from packages.runtime.discovery import DiscoveredService, discover_services
 from packages.runtime.worker import WorkerRuntime
-from packages.storage.sessions import (
-    MemorySessionStore,
-    RedisSessionStoreConfig,
-)
 
 CONTROLLER_EVENT_BUS_MODE_ENV = "CONTROLLER_EVENT_BUS_MODE"
 EVENT_BUS_MODES = frozenset({"inprocess", "nats"})
@@ -130,7 +124,9 @@ def build_composition_plan(
     validate_event_bus_mode(mode)
     services = discover_services(root)
     agent = tuple(service for service in services if service.name in AGENT_SERVICE_NAMES)
-    controller = tuple(service for service in services if service.name in CORE_CONTROLLER_SERVICE_NAMES)
+    controller = tuple(
+        service for service in services if service.name in CORE_CONTROLLER_SERVICE_NAMES
+    )
     found_agent_names = {service.name for service in agent}
     if found_agent_names != AGENT_SERVICE_NAMES:
         raise ValueError(
@@ -145,26 +141,6 @@ def build_composition_plan(
             f"actual={sorted(found_controller_names)}"
         )
     return CompositionPlan(mode, controller, agent)
-
-
-def load_worker_apps(
-    root: Path,
-    services: tuple[DiscoveredService, ...],
-) -> tuple[App, ...]:
-    apps: list[App] = []
-    for service in services:
-        if service.kind != "worker":
-            continue
-        module = load_service_entrypoint(root, service)
-        app = getattr(module, "app", None)
-        if not isinstance(app, App):
-            raise TypeError(f"{service.path}: worker entrypoint must expose App as 'app'")
-        if app.name != service.name:
-            raise ValueError(
-                f"{service.path}: discovered name {service.name!r} != App {app.name!r}"
-            )
-        apps.append(app)
-    return tuple(apps)
 
 
 @dataclass(frozen=True)
@@ -234,9 +210,7 @@ class ControllerRuntime:
         self.check_report()
         bus = event_bus_for_mode(self.profile.event_bus_mode)
         borrowed = BorrowedEventBus(bus)
-        sessions = self._memory_sessions()
         await bus.connect()
-        await sessions.connect()
         servers: list[Server] = []
         service_tasks: list[asyncio.Task[Any]] = []
         server_tasks: list[asyncio.Task[Any]] = []
@@ -261,7 +235,7 @@ class ControllerRuntime:
                         asyncio.create_task(runner(*args), name=loaded.service.name)
                     )
                 else:
-                    server = self._http_server(loaded, borrowed, sessions)
+                    server = self._http_server(loaded, borrowed)
                     servers.append(server)
                     server_tasks.append(
                         asyncio.create_task(server.serve(), name=loaded.service.name)
@@ -283,7 +257,6 @@ class ControllerRuntime:
                 raise RuntimeError(f"controller service stopped unexpectedly: {stopped.get_name()}")
         finally:
             await self._shutdown(servers, service_tasks, server_tasks, waiter)
-            await sessions.close()
             await bus.close()
 
     @staticmethod
@@ -329,33 +302,12 @@ class ControllerRuntime:
             raise TypeError(f"{loaded.service.path}: missing callable {symbol}")
 
     @staticmethod
-    def _memory_sessions() -> MemorySessionStore:
-        return MemorySessionStore(
-            RedisSessionStoreConfig(
-                url="memory://",
-                ttl_seconds=int(env(Auth.SESSION_TTL_ENV, Auth.DEFAULT_SESSION_TTL_SECONDS)),
-                key_prefix="session",
-                token_bytes=32,
-                default_roles=(ServiceRole.USER.value,),
-                default_workspace_id=DEFAULT_WORKSPACE_ID,
-                rate_limit_key_prefix="rate",
-                rate_limit=120,
-                rate_limit_window_seconds=60,
-                email_verification_key_prefix="email_verify",
-                email_verification_ttl_seconds=3600,
-                email_verification_token_bytes=32,
-            )
-        )
-
-    @staticmethod
     def _http_server(
         loaded: LoadedControllerService,
         bus: BorrowedEventBus,
-        _sessions: MemorySessionStore,
     ) -> Server:
         if loaded.service.name == API_GATEWAY_SERVICE_NAME:
             # API 세션 권한은 RedisSessionStore의 fail-closed lifecycle만 사용한다.
-            # controller의 process-local session dict는 realtime test/dev 경로에만 남긴다.
             app = loaded.module.create_app(event_bus=bus)
             port = int(env("PORT", "8000"))
         else:
