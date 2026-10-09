@@ -1,0 +1,17 @@
+# K8s Clue — Kubernetes 장애 진단과 Draft PR 제안
+
+> Kubernetes 장애 증거를 읽기 전용으로 수집하고, 버전이 붙은 규칙으로 원인을 판정한 뒤, 허용된 GitOps 변경만 GitHub Draft PR로 제안하는 Python 팀 프로젝트입니다.
+
+- 5인 팀의 팀장으로 전체 아키텍처, 이벤트 런타임, 서비스 간 계약, CI와 배포를 맡았습니다. 룰 카탈로그, 에이전트 수집, PR 생성, 게이트웨이 인증은 팀원이 작성했습니다. - 클러스터를 직접 변경하거나 PR을 자동 merge하지 않습니다. 증거와 허용 필드를 확인하고, 사람이 검토할 Draft PR까지만 생성합니다. - 공개 정리본은 ImagePullBackOff 한 경로를 kind와 계약 테스트 86개로 확인했습니다. 전체 pytest는 302개이며, 외부 클러스터·GitHub App 연동 E2E는 아직 검증하지 않았습니다.
+
+## Docs
+
+- [Project Map](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/PROJECT-MAP.md): 현재 서비스, 화면과 디렉터리 책임
+- [Python 제품 완성 계획](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/PYTHON-FIRST-PLAN.md): 로컬 실행 환경, 보존할 코드와 완료 기준
+- [설계 근거](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/design.md): byte span 치환, 규칙 기반 판정과 수집 범위의 한계
+- [Golden Path](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/GOLDEN-PATH.md): ImagePullBackOff 증거부터 회복 확인까지의 안전 계약
+- [팀 과제와 개인 확장의 경계](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/personal-extension.md): 역할, 커밋 범위와 검증 근거
+- [수집 완전성 계약](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/collection-contract.md): completed, partial, unavailable과 사유 전달
+- [메타데이터 카탈로그](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/metadata-catalog.md): 자산, 스키마 계약, 리니지와 실행 단위 모델
+- [품질 검사 SQL](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/sql-quality-checks.md): 신선도, 드리프트, 중복과 리니지 검사
+- [카탈로그 조회 API](https://raw.githubusercontent.com/woonyong-choi/k8s-clue/main/docs/catalog-api.md): 응답 envelope, 페이지네이션과 상태 코드

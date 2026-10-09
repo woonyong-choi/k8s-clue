@@ -2,7 +2,7 @@
 
 ## Runtime
 
-기본 제어면은 15개 서비스입니다.
+기본 제어면은 15개 서비스를 단일 Controller 프로세스로 조합한다. 대상 에이전트를 포함하면 16개 서비스다.
 
 | 구간 | 서비스 |
 |---|---|
@@ -19,13 +19,15 @@
 
 `api-gateway`는 identity/session, GitHub App·repository discovery, webhook, RCA query/bundle, agent evidence lease/result, dead letter, health/metrics, 정적 frontend proxy만 제공합니다.
 
-Frontend route는 세 개입니다.
+Frontend route는 세 개다.
 
-- `/`: 사건 목록으로 이동
+- `/`: 제품 소개와 Golden Path 안내
 - `/incidents`: 사건 목록
-- `/incidents/:correlationId`: evidence, RCA, Draft PR, verification 상세
+- `/incidents/:correlationId`: 진단 근거와 선택된 수정안. PR, 배포와 회복의 실제 진행 상태는 아직 표시하지 않음
 
-WebSocket gateway와 대형 dashboard route는 없습니다.
+API gateway는 Redis를 세션 권위로 사용한다. Helm은 같은 Controller Pod에 loopback 전용 Redis를 배치하며 replica 하나만 허용한다. Redis 재시작 시 로그인 세션은 소멸하지만 업무 증거는 PostgreSQL에 남는다.
+
+WebSocket gateway와 대형 dashboard route는 없다.
 
 ## 디렉터리 책임
 
