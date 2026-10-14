@@ -1,0 +1,118 @@
+/* 사건 이력 구성 요소. 값은 tokens/tokens.css, 색은 styles.css의 기존 변수를 쓴다. */
+
+.history {
+  margin-top: var(--space-5);
+  padding: var(--space-5);
+  border: var(--border-thin) solid var(--line);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: var(--panel);
+}
+
+.history-head {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.history-heading {
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--size-text-14);
+}
+
+.history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-window {
+  font: var(--size-text-12) var(--font-mono);
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.history-notice {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-thin) solid var(--line);
+  font-size: var(--size-text-14);
+  line-height: var(--leading-normal);
+}
+
+.history-notice-detail {
+  color: var(--muted);
+}
+
+.history-info {
+  border-color: var(--green-dim);
+}
+
+.history-warning {
+  border-color: var(--red);
+}
+
+.history-warning .history-notice-title {
+  color: var(--red);
+}
+
+.history-coverage {
+  margin: var(--space-3) 0 0;
+  font-size: var(--size-text-13);
+  line-height: var(--leading-relaxed);
+  color: var(--red);
+}
+
+.history-resource,
+.history-event {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-thin) solid var(--line);
+  font-size: var(--size-text-14);
+}
+
+.history-event-body {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.history-time {
+  font: var(--size-text-12) var(--font-mono);
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.history-note,
+.history-lifecycle {
+  font-size: var(--size-text-12);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.history-uid {
+  justify-self: start;
+  font: var(--size-text-12) var(--font-mono);
+  overflow-wrap: anywhere;
+  color: var(--green);
+}
+
+.history-uid-missing {
+  color: var(--red);
+}
+
+.history-empty {
+  margin: 0;
+  font-size: var(--size-text-14);
+  color: var(--muted);
+}
+
+@media (min-width: 900px) {
+  .history-event {
+    grid-template-columns: minmax(0, var(--size-column-time)) 1fr;
+    gap: var(--space-4);
+  }
+}

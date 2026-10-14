@@ -1,0 +1,17 @@
+/* tokens.json: 생성물, 손으로 고치지 않음 */
+:root {
+  --font-mono: 'IBM Plex Mono', monospace;
+  --size-text-12: 0.75rem;
+  --size-text-13: 0.8125rem;
+  --size-text-14: 0.875rem;
+  --size-column-time: 220px;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.7;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --border-thin: 1px;
+  --breakpoint-md: 900px;
+}
