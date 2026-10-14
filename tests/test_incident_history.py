@@ -1,0 +1,553 @@
+"""사건 이력 backend: UID 구분, 완전성 판정, 권한, 원자 기록 계약.
+
+수집 누락·부분 관측·잘림은 "이력 없음"이나 복구로 읽히면 안 된다.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from domains.inventory.repository import InventoryRepository
+from domains.inventory.snapshot_evidence import COMPLETE_CUT_PROOF_KEY
+from domains.rca import history_router
+from domains.rca.history import (
+    OBSERVATION_MAX_GAP_MS,
+    InventoryObservation,
+    assess_completeness,
+    incident_history_window,
+    observation_from_snapshot_row,
+    project_resources,
+)
+from domains.timeline.mapping import inventory_timeline_event
+from packages.contracts.identity import Permission
+from packages.contracts.parity import ClusterScope
+from packages.contracts.timeline import TimelineCoverage, TimelineEvent, TimelineWindow
+from packages.contracts.timeline.history import (
+    IncidentHistoryCompleteness,
+    IncidentHistoryResponse,
+)
+from packages.runtime.dependencies import get_db
+
+WORKSPACE = "ws-1"
+CLUSTER = "cluster-1"
+BASE = datetime(2026, 10, 15, 0, 0, tzinfo=UTC)
+BASE_MS = int(BASE.timestamp() * 1_000)
+MINUTE_MS = 60_000
+
+
+def _at(minutes: float) -> datetime:
+    return BASE + timedelta(minutes=minutes)
+
+
+def _event(
+    event_type: str,
+    minutes: float,
+    *,
+    uid: str | None,
+    name: str = "api-0",
+    key: str | None = None,
+) -> TimelineEvent:
+    source_key = key or f"inventory:{event_type}:{name}:{uid}:{minutes}"
+    return inventory_timeline_event(
+        event_id=source_key,
+        source_key=source_key,
+        native_id=f"v1/Pod/default/{name}",
+        occurred_at=_at(minutes),
+        workspace_id=WORKSPACE,
+        cluster_id=CLUSTER,
+        api_version="v1",
+        resource_kind="Pod",
+        namespace="default",
+        name=name,
+        uid=uid,
+        title=f"Pod {name} {event_type}",
+        event_type=event_type,  # type: ignore[arg-type]
+    )
+
+
+def _window(from_minutes: float = 0, to_minutes: float = 30) -> TimelineWindow:
+    return TimelineWindow(
+        from_ms=BASE_MS + int(from_minutes * MINUTE_MS),
+        to_ms=BASE_MS + int(to_minutes * MINUTE_MS),
+    )
+
+
+def _complete(minutes: float) -> InventoryObservation:
+    return InventoryObservation(BASE_MS + int(minutes * MINUTE_MS), True)
+
+
+def _partial(minutes: float) -> InventoryObservation:
+    return InventoryObservation(BASE_MS + int(minutes * MINUTE_MS), False)
+
+
+def _assess(
+    observations: list[InventoryObservation],
+    *,
+    window: TimelineWindow | None = None,
+    capture: tuple[TimelineCoverage, ...] = (),
+    truncated: bool = False,
+    inventory_authorized: bool = True,
+    source_unavailable: bool = False,
+) -> IncidentHistoryCompleteness:
+    return assess_completeness(
+        window=window or _window(),
+        now_ms=BASE_MS + 24 * 60 * MINUTE_MS,
+        observations=observations,
+        capture_coverage=capture,
+        scope_cluster=(WORKSPACE, CLUSTER),
+        truncated=truncated,
+        source_unavailable=source_unavailable,
+        inventory_authorized=inventory_authorized,
+    )
+
+
+# --- UID 구분 -----------------------------------------------------------------
+
+
+def test_same_name_with_different_uid_is_a_separate_resource() -> None:
+    events = [
+        _event("add", 1, uid="uid-old"),
+        _event("delete", 5, uid="uid-old"),
+        _event("add", 6, uid="uid-new"),
+    ]
+
+    resources = project_resources(events, coverage=())
+
+    by_uid = {item.subject.resource.uid: item for item in resources}  # type: ignore[union-attr]
+    assert set(by_uid) == {"uid-old", "uid-new"}
+    assert by_uid["uid-old"].lifecycle == "deleted"
+    assert by_uid["uid-new"].lifecycle == "present"
+    assert by_uid["uid-new"].deleted_at is None
+
+
+def test_uid_less_inventory_stays_a_locator_and_is_not_promoted() -> None:
+    resources = project_resources([_event("add", 1, uid=None)], coverage=())
+
+    assert len(resources) == 1
+    assert resources[0].subject.kind == "inventory_locator"
+    assert resources[0].lifecycle == "present"
+
+
+def test_resource_seen_only_through_kubernetes_events_is_unobserved() -> None:
+    event = _event("add", 2, uid="uid-1").model_copy(update={"source": "kubernetes_event"})
+
+    resources = project_resources([event], coverage=())
+
+    assert [item.lifecycle for item in resources] == ["unobserved"]
+    assert resources[0].deleted_at is None
+
+
+def test_deletion_overlapping_a_gap_is_gap_bounded() -> None:
+    gap = TimelineCoverage(
+        scope=ClusterScope(workspace_id=WORKSPACE, cluster_id=CLUSTER),
+        source="inventory",
+        from_ms=BASE_MS + 2 * MINUTE_MS,
+        to_ms=BASE_MS + 9 * MINUTE_MS,
+        reason="collection_gap",
+    )
+    events = [
+        _event("add", 1, uid="uid-a", name="a"),
+        _event("delete", 9, uid="uid-a", name="a"),
+        _event("add", 10, uid="uid-b", name="b"),
+        _event("delete", 12, uid="uid-b", name="b"),
+    ]
+
+    resources = {
+        item.subject.resource.uid: item  # type: ignore[union-attr]
+        for item in project_resources(events, coverage=(gap,))
+    }
+
+    assert resources["uid-a"].deleted_at_bound == "gap_bounded"
+    assert resources["uid-b"].deleted_at_bound == "observed"
+
+
+# --- 완전성 -------------------------------------------------------------------
+
+
+def test_no_observation_is_unavailable_never_complete() -> None:
+    result = _assess([])
+
+    assert result.status == "unavailable"
+    assert result.reasons == ("no_observation",)
+
+
+def test_observations_outside_the_window_do_not_prove_it() -> None:
+    result = _assess([_complete(-120)], window=_window(0, 30))
+
+    assert result.status == "unavailable"
+
+
+def test_complete_cuts_across_the_window_are_complete() -> None:
+    result = _assess([_complete(1), _complete(6), _complete(12), _complete(18), _complete(25)])
+
+    assert result.status == "complete"
+    assert result.reasons == ()
+    assert result.coverage == ()
+
+
+def test_missing_cut_proof_is_partial_not_complete() -> None:
+    result = _assess([_complete(1), _partial(6), _complete(12), _complete(18), _complete(25)])
+
+    assert result.status == "partial"
+    assert "partial_scope" in result.reasons
+    assert any(item.reason == "partial_scope" for item in result.coverage)
+
+
+def test_observation_gap_is_reported_and_never_filled() -> None:
+    result = _assess([_complete(1), _complete(25)])
+
+    assert result.status == "partial"
+    assert "collection_gap" in result.reasons
+    gap = next(item for item in result.coverage if item.reason == "collection_gap")
+    assert gap.from_ms == BASE_MS + MINUTE_MS
+    assert gap.to_ms == BASE_MS + 25 * MINUTE_MS
+    assert gap.to_ms - gap.from_ms > OBSERVATION_MAX_GAP_MS
+
+
+def test_window_edges_without_observation_are_gaps() -> None:
+    result = _assess([_complete(12)], window=_window(0, 30))
+
+    assert result.status == "partial"
+    assert len([item for item in result.coverage if item.reason == "collection_gap"]) == 2
+
+
+def test_truncation_downgrades_complete_history() -> None:
+    cuts = [_complete(1), _complete(6), _complete(12), _complete(18), _complete(25)]
+
+    result = _assess(cuts, truncated=True)
+
+    assert result.status == "partial"
+    assert result.reasons == ("truncated",)
+
+
+def test_unauthorized_inventory_is_partial_with_a_generic_reason() -> None:
+    result = _assess([], inventory_authorized=False, source_unavailable=True)
+
+    assert result.status == "partial"
+    assert result.reasons == ("source_unavailable",)
+
+
+def test_snapshot_rows_without_proof_or_stale_are_never_complete() -> None:
+    proven = {"collected_at": BASE, "status": "accepted", "summary": {}}
+    proven["summary"] = {COMPLETE_CUT_PROOF_KEY: {"resources_complete": True}}
+    legacy = {"collected_at": BASE, "status": "accepted", "summary": {"summary": {}}}
+    stale = {"collected_at": BASE, "status": "ignored_stale", "summary": proven["summary"]}
+
+    assert observation_from_snapshot_row(proven).resources_complete is True  # type: ignore[union-attr]
+    assert observation_from_snapshot_row(legacy).resources_complete is False  # type: ignore[union-attr]
+    assert observation_from_snapshot_row(stale) is None
+
+
+def test_default_window_brackets_the_incident() -> None:
+    window = incident_history_window(anchor=BASE, from_ms=None, to_ms=None)
+
+    assert window.from_ms == BASE_MS - 3_600_000
+    assert window.to_ms == BASE_MS + 900_000
+
+
+# --- 응답 계약 ----------------------------------------------------------------
+
+
+def test_contract_rejects_complete_history_with_reasons() -> None:
+    with pytest.raises(ValidationError):
+        IncidentHistoryCompleteness(status="complete", reasons=("collection_gap",))
+
+
+def test_contract_rejects_no_observation_outside_unavailable() -> None:
+    with pytest.raises(ValidationError):
+        IncidentHistoryCompleteness(status="partial", reasons=("no_observation",))
+
+
+def test_contract_rejects_truncated_response_without_reason() -> None:
+    with pytest.raises(ValidationError):
+        IncidentHistoryResponse(
+            correlation_id="c-1",
+            cluster_id=CLUSTER,
+            window=_window(),
+            completeness=IncidentHistoryCompleteness(status="complete"),
+            truncated=True,
+        )
+
+
+def test_contract_rejects_events_in_unavailable_history() -> None:
+    with pytest.raises(ValidationError):
+        IncidentHistoryResponse(
+            correlation_id="c-1",
+            cluster_id=CLUSTER,
+            window=_window(),
+            events=(_event("add", 1, uid="uid-1"),),
+            completeness=IncidentHistoryCompleteness(
+                status="unavailable", reasons=("no_observation",)
+            ),
+        )
+
+
+# --- 라우터: 권한과 판정 ---------------------------------------------------------
+
+
+@dataclass
+class _Snapshot:
+    events: tuple[TimelineEvent, ...]
+    truncated: bool = False
+
+
+class _FakeDb:
+    def __init__(
+        self,
+        *,
+        events: tuple[TimelineEvent, ...] = (),
+        observations: list[dict[str, Any]] | None = None,
+        truncated: bool = False,
+        report: dict[str, Any] | None = None,
+    ) -> None:
+        self.events = events
+        self.observations = observations or []
+        self.truncated = truncated
+        self.report = report
+        self.read_scope: Any = None
+
+    def list_rca_report_records(self, workspace_id: str, **_: Any) -> list[dict[str, Any]]:
+        return [self.report] if self.report else []
+
+    def snapshot_timeline_events(self, read_scope: Any, *, predicate: Any, limit: int) -> _Snapshot:
+        self.read_scope = read_scope
+        kept = tuple(event for event in self.events if predicate.matches_snapshot(event))
+        return _Snapshot(events=kept, truncated=self.truncated)
+
+    def snapshot_timeline_coverage(self, read_scope: Any, *, window: Any) -> tuple[()]:
+        return ()
+
+    def list_inventory_snapshot_observations(self, **_: Any) -> list[dict[str, Any]]:
+        return self.observations
+
+    def list_evidence_windows_by_correlation(self, *_: Any, **__: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "evidence_key": "k-1",
+                "source_id": "agent",
+                "window_start": "w-1",
+                "event_id": "e-1",
+                "updated_at": BASE,
+            }
+        ]
+
+
+def _report() -> dict[str, Any]:
+    return {
+        "workspace_id": WORKSPACE,
+        "correlation_id": "c-1",
+        "cluster_id": CLUSTER,
+        "first_seen_at": BASE.isoformat(),
+        "created_at": BASE,
+    }
+
+
+def _proven(minutes: float) -> dict[str, Any]:
+    return {
+        "collected_at": _at(minutes),
+        "status": "accepted",
+        "summary": {COMPLETE_CUT_PROOF_KEY: {"resources_complete": True}},
+    }
+
+
+def _client(
+    monkeypatch: pytest.MonkeyPatch, db: _FakeDb, granted: set[Permission]
+) -> TestClient:
+    def fake_access(
+        _db: Any, _current: Any, _workspace: str, _cluster: str, action: str, **__: Any
+    ) -> None:
+        if action not in {permission.value for permission in granted}:
+            raise HTTPException(status_code=403, detail="denied")
+
+    monkeypatch.setattr(history_router, "require_cluster_access", fake_access)
+    monkeypatch.setattr(history_router, "_now_ms", lambda: BASE_MS + 24 * 60 * MINUTE_MS)
+    app = FastAPI()
+    app.include_router(history_router.router)
+    app.dependency_overrides[history_router.require_session] = lambda: SimpleNamespace(
+        workspace_id=WORKSPACE, user_id="user-1"
+    )
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+ALL = {Permission.RCA_READ, Permission.INVENTORY_READ, Permission.EVIDENCE_READ}
+
+
+def _window_query() -> str:
+    return f"from_ms={BASE_MS}&to_ms={BASE_MS + 30 * MINUTE_MS}"
+
+
+def test_unknown_incident_and_denied_cluster_are_indistinguishable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = _client(monkeypatch, _FakeDb(report=None), ALL)
+    denied = _client(monkeypatch, _FakeDb(report=_report()), {Permission.INVENTORY_READ})
+
+    first = missing.get("/incidents/c-1/history")
+    second = denied.get("/incidents/c-1/history")
+
+    assert first.status_code == second.status_code == 404
+    assert first.json() == second.json()
+
+
+def test_complete_history_with_no_events_is_reported_as_observed_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observations = [_proven(m) for m in (1, 6, 12, 18, 25)]
+    db = _FakeDb(report=_report(), observations=observations)
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert body["completeness"] == {"status": "complete", "coverage": [], "reasons": []}
+    assert body["events"] == []
+    assert body["evidence"][0]["event_id"] == "e-1"
+
+
+def test_events_without_any_observation_are_withheld_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeDb(report=_report(), events=(_event("add", 1, uid="uid-1"),))
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert body["completeness"]["status"] == "unavailable"
+    assert body["events"] == []
+    assert body["resources"] == []
+
+
+def test_denied_inventory_source_is_omitted_without_naming_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeDb(
+        report=_report(),
+        events=(_event("add", 1, uid="uid-1"),),
+        observations=[_proven(m) for m in (1, 6, 12, 18, 25)],
+    )
+    client = _client(monkeypatch, db, {Permission.RCA_READ, Permission.EVIDENCE_READ})
+
+    body = client.get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert body["events"] == []
+    assert body["completeness"]["status"] == "partial"
+    assert body["completeness"]["reasons"] == ["source_unavailable"]
+    assert db.read_scope.inventory_cluster_ids == frozenset()
+    assert db.read_scope.incident_cluster_ids == frozenset({CLUSTER})
+
+
+def test_truncated_history_is_partial_and_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _FakeDb(
+        report=_report(),
+        events=(_event("add", 1, uid="uid-1"),),
+        observations=[_proven(m) for m in (1, 6, 12, 18, 25)],
+        truncated=True,
+    )
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert body["truncated"] is True
+    assert body["completeness"]["status"] == "partial"
+    assert "truncated" in body["completeness"]["reasons"]
+
+
+def test_events_are_ordered_and_split_by_uid(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = (
+        _event("add", 6, uid="uid-new"),
+        _event("delete", 5, uid="uid-old"),
+        _event("add", 1, uid="uid-old"),
+    )
+    db = _FakeDb(
+        report=_report(),
+        events=events,
+        observations=[_proven(m) for m in (1, 6, 12, 18, 25)],
+    )
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert [item["occurred_at"] for item in body["events"]] == sorted(
+        item["occurred_at"] for item in body["events"]
+    )
+    assert body["events"][0]["occurred_at"].endswith("Z")
+    assert len(body["resources"]) == 2
+
+
+def test_wide_or_inverted_windows_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(monkeypatch, _FakeDb(report=_report()), ALL)
+
+    wide = client.get(f"/incidents/c-1/history?from_ms={BASE_MS}&to_ms={BASE_MS + 90_000_000}")
+    inverted = client.get(f"/incidents/c-1/history?from_ms={BASE_MS + 5}&to_ms={BASE_MS + 1}")
+
+    assert wide.status_code == inverted.status_code == 422
+
+
+# --- 원자 기록 ---------------------------------------------------------------
+
+
+class _UnitOfWorkRecorder:
+    """unit_of_work 안에서 호출됐는지와 예외 전파를 기록한다."""
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.appended_at_depth: list[int] = []
+        self.events = (_event("add", 1, uid="uid-1"),)
+
+    def unit_of_work(self) -> Any:
+        recorder = self
+
+        class _Scope:
+            def __enter__(self) -> None:
+                recorder.depth += 1
+
+            def __exit__(self, *_: object) -> None:
+                recorder.depth -= 1
+
+        return _Scope()
+
+    def save_inventory_snapshot_mutation(self, **_: Any) -> Any:
+        return SimpleNamespace(result={"accepted": True}, timeline_events=self.events)
+
+
+def test_snapshot_and_ledger_append_share_one_unit_of_work() -> None:
+    recorder = _UnitOfWorkRecorder()
+
+    def append(events: Any) -> None:
+        recorder.appended_at_depth.append(recorder.depth)
+
+    result = InventoryRepository.save_inventory_snapshot_with_timeline(
+        recorder,  # type: ignore[arg-type]
+        workspace_id=WORKSPACE,
+        cluster_id=CLUSTER,
+        agent_id="agent-1",
+        payload={},
+        append_timeline_events=append,
+    )
+
+    assert result == {"accepted": True}
+    assert recorder.appended_at_depth == [1]
+    assert recorder.depth == 0
+
+
+def test_ledger_failure_propagates_out_of_the_unit_of_work() -> None:
+    recorder = _UnitOfWorkRecorder()
+
+    def append(events: Any) -> None:
+        raise RuntimeError("ledger unavailable")
+
+    with pytest.raises(RuntimeError, match="ledger unavailable"):
+        InventoryRepository.save_inventory_snapshot_with_timeline(
+            recorder,  # type: ignore[arg-type]
+            workspace_id=WORKSPACE,
+            cluster_id=CLUSTER,
+            agent_id="agent-1",
+            payload={},
+            append_timeline_events=append,
+        )
+
+    assert recorder.depth == 0

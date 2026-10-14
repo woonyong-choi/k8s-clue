@@ -1,0 +1,296 @@
+"""Incident history projection: resource lifecycles and honest completeness.
+
+Absence of evidence is never reported as health or recovery.  A history is
+``complete`` only when every observation in the window proves a complete cut
+and no observation gap, partial cut, truncation or unauthorized source exists.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Literal
+
+from domains.inventory.snapshot_evidence import COMPLETE_CUT_PROOF_KEY
+from packages.contracts.parity import ClusterScope
+from packages.contracts.timeline import (
+    TimelineCoverage,
+    TimelineEvent,
+    TimelineInventoryLocatorSubject,
+    TimelineResourceSubject,
+    TimelineWindow,
+)
+from packages.contracts.timeline.history import (
+    CompletenessReason,
+    IncidentHistoryCompleteness,
+    IncidentHistoryResource,
+)
+
+# A collector that has not reported for this long leaves an unobserved gap.
+OBSERVATION_MAX_GAP_MS = 600_000
+
+ResourceKey = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class InventoryObservation:
+    """One accepted collection cut and whether it proved a complete resource list."""
+
+    collected_at_ms: int
+    resources_complete: bool
+
+
+def assess_completeness(
+    *,
+    window: TimelineWindow,
+    now_ms: int,
+    observations: Iterable[InventoryObservation],
+    capture_coverage: Iterable[TimelineCoverage],
+    scope_cluster: tuple[str, str],
+    truncated: bool,
+    source_unavailable: bool,
+    inventory_authorized: bool,
+) -> IncidentHistoryCompleteness:
+    """Decide ``complete`` / ``partial`` / ``unavailable`` without inferring recovery."""
+    workspace_id, cluster_id = scope_cluster
+    from_ms = window.from_ms
+    to_ms = min(window.to_ms, now_ms)
+    reasons: list[CompletenessReason] = []
+    coverage: list[TimelineCoverage] = list(capture_coverage)
+
+    if source_unavailable:
+        reasons.append("source_unavailable")
+    if truncated:
+        reasons.append("truncated")
+    if coverage:
+        reasons.append("collection_gap")
+
+    if not inventory_authorized:
+        # Without authority over the observation record, completeness is unprovable.
+        reasons.append("source_unavailable")
+        return _finish(reasons, coverage, status="partial")
+
+    ordered = sorted(observations, key=lambda item: item.collected_at_ms)
+    in_range = [
+        item for item in ordered if from_ms - OBSERVATION_MAX_GAP_MS <= item.collected_at_ms < to_ms
+    ]
+    if not in_range or to_ms <= from_ms:
+        # No events are returned for an unobserved window, so nothing was truncated.
+        reasons = [reason for reason in reasons if reason != "truncated"]
+        reasons.append("no_observation")
+        return IncidentHistoryCompleteness(
+            status="unavailable",
+            coverage=(),
+            reasons=_unique(reasons),
+        )
+
+    gaps = _observation_gaps(
+        in_range,
+        from_ms=from_ms,
+        to_ms=to_ms,
+        scope=(workspace_id, cluster_id),
+    )
+    if gaps:
+        coverage.extend(gaps)
+        reasons.append("collection_gap")
+    partial = _partial_cut_intervals(in_range, to_ms=to_ms, scope=(workspace_id, cluster_id))
+    if partial:
+        coverage.extend(partial)
+        reasons.append("partial_scope")
+    return _finish(reasons, coverage, status="partial" if reasons else "complete")
+
+
+def project_resources(
+    events: Sequence[TimelineEvent],
+    *,
+    coverage: Iterable[TimelineCoverage],
+) -> tuple[IncidentHistoryResource, ...]:
+    """Derive per-identity lifecycles; the same name with another UID stays separate."""
+    gaps = tuple(coverage)
+    grouped: dict[ResourceKey, list[TimelineEvent]] = {}
+    for event in events:
+        key = _resource_key(event)
+        if key is not None:
+            grouped.setdefault(key, []).append(event)
+
+    resources: list[IncidentHistoryResource] = []
+    for key in sorted(grouped):
+        items = sorted(grouped[key], key=lambda item: (item.occurred_at, item.source_key))
+        subject = _history_subject(items[-1])
+        inventory = [item for item in items if item.source == "inventory"]
+        first = _utc(items[0].occurred_at)
+        last = _utc(items[-1].occurred_at)
+        if not inventory:
+            # Seen only through Kubernetes Events: the resource itself was never inventoried.
+            resources.append(
+                IncidentHistoryResource(
+                    subject=subject,
+                    lifecycle="unobserved",
+                    first_observed_at=first,
+                    last_observed_at=last,
+                )
+            )
+            continue
+        latest = inventory[-1]
+        if latest.event_type == "delete":
+            deleted_at = _utc(latest.occurred_at)
+            resources.append(
+                IncidentHistoryResource(
+                    subject=subject,
+                    lifecycle="deleted",
+                    first_observed_at=first,
+                    last_observed_at=last,
+                    deleted_at=deleted_at,
+                    deleted_at_bound=_deletion_bound(deleted_at, gaps),
+                )
+            )
+        else:
+            resources.append(
+                IncidentHistoryResource(
+                    subject=subject,
+                    lifecycle="present",
+                    first_observed_at=first,
+                    last_observed_at=last,
+                )
+            )
+    return tuple(resources)
+
+
+def incident_history_window(
+    *,
+    anchor: datetime,
+    from_ms: int | None,
+    to_ms: int | None,
+) -> TimelineWindow:
+    """Server default: one hour before and fifteen minutes after the incident."""
+    anchor_ms = int(_utc(anchor).timestamp() * 1_000)
+    start = from_ms if from_ms is not None else max(anchor_ms - 3_600_000, 0)
+    end = to_ms if to_ms is not None else anchor_ms + 900_000
+    return TimelineWindow(from_ms=start, to_ms=end)
+
+
+def observation_from_snapshot_row(row: Mapping[str, object]) -> InventoryObservation | None:
+    """Read a snapshot row; a missing proof means partial, never complete."""
+    collected_at = row.get("collected_at")
+    if not isinstance(collected_at, datetime):
+        return None
+    if row.get("status") == "ignored_stale":
+        return None
+    summary = row.get("summary")
+    proof = summary.get(COMPLETE_CUT_PROOF_KEY) if isinstance(summary, Mapping) else None
+    complete = isinstance(proof, Mapping) and proof.get("resources_complete") is True
+    return InventoryObservation(
+        collected_at_ms=int(_utc(collected_at).timestamp() * 1_000),
+        resources_complete=complete,
+    )
+
+
+def _resource_key(event: TimelineEvent) -> ResourceKey | None:
+    subject = event.subject
+    if isinstance(subject, TimelineResourceSubject):
+        return ("uid", subject.resource.uid)
+    if isinstance(subject, TimelineInventoryLocatorSubject):
+        return ("locator", subject.inventory_key)
+    return None
+
+
+def _history_subject(
+    event: TimelineEvent,
+) -> TimelineResourceSubject | TimelineInventoryLocatorSubject:
+    subject = event.subject
+    if isinstance(subject, TimelineResourceSubject | TimelineInventoryLocatorSubject):
+        return subject
+    raise ValueError("history resources require a resource or inventory locator subject")
+
+
+def _deletion_bound(
+    deleted_at: datetime, gaps: Sequence[TimelineCoverage]
+) -> Literal["observed", "gap_bounded"]:
+    deleted_ms = int(deleted_at.timestamp() * 1_000)
+    for gap in gaps:
+        if gap.from_ms <= deleted_ms <= gap.to_ms:
+            return "gap_bounded"
+    return "observed"
+
+
+def _observation_gaps(
+    observations: Sequence[InventoryObservation],
+    *,
+    from_ms: int,
+    to_ms: int,
+    scope: tuple[str, str],
+) -> list[TimelineCoverage]:
+    cluster_scope = ClusterScope(workspace_id=scope[0], cluster_id=scope[1])
+    points = [item.collected_at_ms for item in observations]
+    gaps: list[TimelineCoverage] = []
+    edges = [(from_ms, points[0])] if points[0] - from_ms > OBSERVATION_MAX_GAP_MS else []
+    edges += [
+        (left, right)
+        for left, right in zip(points, points[1:], strict=False)
+        if right - left > OBSERVATION_MAX_GAP_MS
+    ]
+    if to_ms - points[-1] > OBSERVATION_MAX_GAP_MS:
+        edges.append((points[-1], to_ms))
+    for start, end in edges:
+        if start < end:
+            gaps.append(
+                TimelineCoverage(
+                    scope=cluster_scope,
+                    source="inventory",
+                    from_ms=max(start, 0),
+                    to_ms=max(end, 1),
+                    reason="collection_gap",
+                )
+            )
+    return gaps
+
+
+def _partial_cut_intervals(
+    observations: Sequence[InventoryObservation],
+    *,
+    to_ms: int,
+    scope: tuple[str, str],
+) -> list[TimelineCoverage]:
+    cluster_scope = ClusterScope(workspace_id=scope[0], cluster_id=scope[1])
+    intervals: list[TimelineCoverage] = []
+    for index, item in enumerate(observations):
+        if item.resources_complete:
+            continue
+        end = observations[index + 1].collected_at_ms if index + 1 < len(observations) else to_ms
+        start = max(item.collected_at_ms, 0)
+        if start < end:
+            intervals.append(
+                TimelineCoverage(
+                    scope=cluster_scope,
+                    source="inventory",
+                    from_ms=start,
+                    to_ms=end,
+                    reason="partial_scope",
+                )
+            )
+    return intervals
+
+
+def _finish(
+    reasons: Sequence[CompletenessReason],
+    coverage: Sequence[TimelineCoverage],
+    *,
+    status: Literal["complete", "partial"],
+) -> IncidentHistoryCompleteness:
+    unique = _unique(reasons)
+    if status == "complete" and unique:
+        status = "partial"
+    return IncidentHistoryCompleteness(
+        status=status,
+        coverage=tuple(coverage) if status == "partial" else (),
+        reasons=unique,
+    )
+
+
+def _unique(reasons: Sequence[CompletenessReason]) -> tuple[CompletenessReason, ...]:
+    return tuple(dict.fromkeys(reasons))
+
+
+def _utc(value: datetime) -> datetime:
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)

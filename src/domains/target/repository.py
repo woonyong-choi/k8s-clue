@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -41,6 +42,7 @@ from packages.config.settings import env
 from packages.contracts.event_bus.interfaces import EventEnvelope, JsonObject
 from packages.contracts.identity import ClusterRegistrationStatus
 from packages.contracts.target import TargetComponent, TargetDesiredStateStatus
+from packages.contracts.timeline import TimelineEvent
 from packages.storage.engine import DatabaseConnection, iso_or_none
 from packages.storage.schema import EventModel, OutboxModel
 
@@ -1170,11 +1172,19 @@ class TargetAgentRepository(DatabaseConnection):
         agent_id: str | None,
         event_envelope: EventEnvelope,
         payload: JsonObject,
+        timeline_events: Sequence[TimelineEvent] = (),
     ) -> JsonObject:
+        """Record one evidence window once, with its Timeline facts in the same transaction.
+
+        ``timeline_events`` is optional so existing callers keep their behaviour.  When
+        given, the ledger append joins this unit of work: either the window, outbox
+        event and ledger facts all commit, or none does.  A re-received key returns
+        before any append, so a repeat can never add a second ledger fact.
+        """
         window_table = EvidenceWindow.__table__
         event_table = EventModel.__table__
         outbox_table = OutboxModel.__table__
-        with self.connection() as conn:
+        with self.unit_of_work() as conn:
             inserted = (
                 conn.execute(
                     pg_insert(window_table)
@@ -1225,7 +1235,47 @@ class TargetAgentRepository(DatabaseConnection):
                 )
                 .values(result=None, updated_at=func.now())
             )
+            if timeline_events:
+                self._append_timeline_events_in_transaction(timeline_events)
         return {"duplicate": False, **dict(inserted)}
+
+    def _append_timeline_events_in_transaction(self, events: Sequence[TimelineEvent]) -> None:
+        # The ledger repository is composed into Database beside this one; it joins the
+        # active unit of work, so a missing ledger must fail the whole recording.
+        append = getattr(self, "append_timeline_events", None)
+        if not callable(append):
+            raise TypeError("timeline ledger is not composed into this repository")
+        append(events)
+
+    def list_evidence_windows_by_correlation(
+        self,
+        workspace_id: str,
+        cluster_id: str,
+        correlation_id: str,
+        *,
+        limit: int,
+    ) -> list[JsonObject]:
+        """List evidence window references of one incident without their payloads."""
+        table = EvidenceWindow.__table__
+        statement = (
+            select(
+                table.c.evidence_key,
+                table.c.source_id,
+                table.c.window_start,
+                table.c.event_id,
+                table.c.updated_at,
+            )
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.cluster_id == cluster_id,
+                table.c.correlation_id == correlation_id,
+            )
+            .order_by(table.c.updated_at.asc(), table.c.evidence_key.asc())
+            .limit(limit)
+        )
+        with self.connection() as conn:
+            rows = conn.execute(statement).mappings().all()
+        return [dict(row) for row in rows]
 
     def rotate_alertmanager_evidence_window(
         self,

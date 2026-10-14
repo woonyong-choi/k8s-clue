@@ -46,6 +46,7 @@ from domains.inventory.models import (
     timeline_coverage_snapshot_clause,
 )
 from domains.inventory.resource_types import project_inventory_product_counts
+from domains.inventory.snapshot_evidence import COMPLETE_CUT_PROOF_KEY
 from domains.inventory_filter.repository import (
     inventory_snapshot_lock_key,
     sync_inventory_filter_projection,
@@ -1035,6 +1036,63 @@ class InventoryRepository(DatabaseConnection):
             payload=payload,
         ).result
 
+    def save_inventory_snapshot_with_timeline(
+        self,
+        *,
+        workspace_id: str,
+        cluster_id: str,
+        agent_id: str,
+        payload: JsonObject,
+        append_timeline_events: Callable[[Sequence[TimelineEvent]], object],
+    ) -> JsonObject:
+        """Persist a snapshot and its Timeline facts in one transaction.
+
+        ``append_timeline_events`` is the ledger append of the same database
+        (``Database.append_timeline_events``).  Both writes join this unit of
+        work, so a ledger failure rolls the snapshot back and a re-sent cut is
+        absorbed by the ledger's source-key uniqueness instead of duplicating.
+        """
+        with self.unit_of_work():
+            mutation = self.save_inventory_snapshot_mutation(
+                workspace_id=workspace_id,
+                cluster_id=cluster_id,
+                agent_id=agent_id,
+                payload=payload,
+            )
+            if mutation.timeline_events:
+                append_timeline_events(mutation.timeline_events)
+        return mutation.result
+
+    def list_inventory_snapshot_observations(
+        self,
+        *,
+        workspace_id: str,
+        cluster_id: str,
+        window: TimelineWindow,
+        margin_ms: int,
+        limit: int = 1_000,
+    ) -> list[JsonObject]:
+        """Read accepted collection cuts around a window, newest bounded by ``limit``."""
+        table = ClusterInventorySnapshotRecord.__table__
+        lower = datetime.fromtimestamp(max(window.from_ms - margin_ms, 0) / 1_000, tz=UTC)
+        upper = datetime.fromtimestamp(window.to_ms / 1_000, tz=UTC)
+        statement = (
+            select(table.c.collected_at, table.c.status, table.c.summary)
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.cluster_id == cluster_id,
+                table.c.status != "ignored_stale",
+                live_inventory_snapshot_clause(table),
+                table.c.collected_at >= lower,
+                table.c.collected_at < upper,
+            )
+            .order_by(table.c.collected_at.desc(), table.c.snapshot_id.desc())
+            .limit(limit)
+        )
+        with self.connection() as conn:
+            rows = conn.execute(statement).mappings().all()
+        return [dict(row) for row in reversed(rows)]
+
     def save_inventory_snapshot_mutation(
         self,
         *,
@@ -1085,6 +1143,9 @@ class InventoryRepository(DatabaseConnection):
         elif not resources_complete:
             partial_reason_codes.append("source_resources_incomplete")
         scoped_delete_scopes = inventory_deletion_scopes(source_summary)
+        # Only the writer knows whether this cut replaced the full resource list, so the
+        # proof is persisted; rows without it can never be read back as complete.
+        summary = {**summary, COMPLETE_CUT_PROOF_KEY: {"resources_complete": resources_complete}}
 
         with self.connection() as conn:
             conn.execute(

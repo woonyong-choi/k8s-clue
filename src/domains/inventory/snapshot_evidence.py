@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+# Persisted beside the agent summary so history never has to guess whether a cut was complete.
+COMPLETE_CUT_PROOF_KEY = "timeline_proof"
+
 
 def snapshot_source_summary(
     snapshot: Mapping[str, object] | None,
