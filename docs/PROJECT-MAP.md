@@ -25,7 +25,7 @@ Frontend route는 세 개다.
 
 - `/`: 제품 소개와 Golden Path 안내
 - `/incidents`: 사건 목록
-- `/incidents/:correlationId`: 진단 근거와 선택된 수정안. PR, 배포와 회복의 실제 진행 상태는 아직 표시하지 않음
+- `/incidents/:correlationId`: 진단 근거와 선택된 수정안, 그 아래 독립으로 불러오는 보존된 사건 이력. 이력은 리소스를 UID 전체로 구분하고(이름이 같아도 UID가 다르면 별개), UID 없는 locator 항목은 "UID 미수집"으로 표시하며, 관측하지 못한 삭제 시각은 상한이라고 밝힌다. 완전성은 창 전체 관측·불완전(수집 공백 등 사유 표시)·수집 기록 없음으로 나누어 보이고, 조회 실패와 빈 이력은 정상이나 복구로 표시하지 않는다. PR, 배포와 회복의 실제 진행 상태는 아직 표시하지 않음
 
 API gateway는 Redis를 세션 권위로 사용한다. Helm은 같은 Controller Pod에 loopback 전용 Redis를 배치하며 replica 하나만 허용한다. Redis 재시작 시 로그인 세션은 소멸하지만 업무 증거는 PostgreSQL에 남는다.
 
