@@ -24,12 +24,12 @@ selector = RecoverySelector()
 dispatcher = RecoveryDispatcher()
 
 
-@app.on(RcaCompletedBody)
+@app.on(RcaCompletedBody, consumer="recovery-worker")
 async def on_rca_completed(evt: RcaCompletedBody) -> AsyncIterator[EventBody]:
     yield pipeline.plan_body(evt)
 
 
-@app.on(RecoveryPlannedBody)
+@app.on(RecoveryPlannedBody, consumer="select-worker")
 async def on_recovery_planned(
     evt: RecoveryPlannedBody,
     ctx: EventContext[RecoveryPlanStore],
@@ -55,7 +55,7 @@ async def on_recovery_planned(
     yield body
 
 
-@app.on(RecoveryActionSelectedBody)
+@app.on(RecoveryActionSelectedBody, consumer="dispatch-worker")
 async def on_recovery_action_selected(
     evt: RecoveryActionSelectedBody,
     ctx: EventContext[object],

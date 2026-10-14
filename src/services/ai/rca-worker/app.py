@@ -27,7 +27,7 @@ pipeline = RcaCompletionPipeline()
 BACKLOG_RULE_RESOLVED_REASON = "matching RCA rule is now available"
 
 
-@app.on(EvidenceBundleBuiltBody)
+@app.on(EvidenceBundleBuiltBody, consumer="plan-worker")
 async def on_evidence_bundle_built(
     evt: EvidenceBundleBuiltBody,
     ctx: EventContext[RcaBacklogStore],
@@ -50,14 +50,14 @@ async def on_evidence_bundle_built(
         yield body
 
 
-@app.on(RcaCandidatesPlannedBody)
+@app.on(RcaCandidatesPlannedBody, consumer="analyze-worker")
 async def on_candidates_planned(
     evt: RcaCandidatesPlannedBody,
 ) -> AsyncIterator[EventBody]:
     yield evaluation_pipeline.evaluate_body(evt)
 
 
-@app.on(RcaCandidatesEvaluatedBody)
+@app.on(RcaCandidatesEvaluatedBody, consumer="rca-worker")
 async def on_candidates_evaluated(
     evt: RcaCandidatesEvaluatedBody,
     ctx: EventContext[RcaStore],
