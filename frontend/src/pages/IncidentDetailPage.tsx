@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { getRemediationBundle, type RemediationBundle } from "../api";
+import {
+  getIncidentHistory,
+  getRemediationBundle,
+  HttpError,
+  type RemediationBundle,
+} from "../api";
+import { IncidentHistory, type HistoryState } from "../components/IncidentHistory";
 import type { AppRoute } from "../router";
 
 const PIPELINE = [
@@ -14,6 +20,7 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
   const correlationId = route.kind === "incident" ? route.correlationId : "";
   const [bundle, setBundle] = useState<RemediationBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<{ id: string; state: HistoryState } | null>(null);
 
   useEffect(() => {
     if (!correlationId) return;
@@ -24,6 +31,18 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
         if (!abort.signal.aborted) {
           setError(reason instanceof Error ? reason.message : "RCA bundle을 불러오지 못했습니다.");
         }
+      });
+    return () => abort.abort();
+  }, [correlationId]);
+
+  useEffect(() => {
+    if (!correlationId) return;
+    const abort = new AbortController();
+    getIncidentHistory(correlationId, abort.signal)
+      .then((value) => setLoaded({ id: correlationId, state: { kind: "ready", history: value } }))
+      .catch((reason: unknown) => {
+        if (abort.signal.aborted) return;
+        setLoaded({ id: correlationId, state: { kind: "error", message: historyErrorMessage(reason) } });
       });
     return () => abort.abort();
   }, [correlationId]);
@@ -114,8 +133,17 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
           )}
         </article>
       </div>
+
+      <IncidentHistory state={loaded?.id === correlationId ? loaded.state : { kind: "loading" }} />
     </section>
   );
+}
+
+function historyErrorMessage(reason: unknown): string {
+  if (reason instanceof HttpError && reason.status === 404) {
+    return "사건이 없거나 볼 권한이 없습니다. 이력이 비어 있다는 뜻이 아닙니다.";
+  }
+  return reason instanceof Error ? reason.message : "이력을 불러오지 못했습니다.";
 }
 
 function DetailMessage({ title, detail }: { title: string; detail?: string }) {

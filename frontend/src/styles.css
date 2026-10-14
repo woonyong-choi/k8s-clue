@@ -82,7 +82,24 @@ nav a:hover, nav a[aria-current="page"] { color: var(--ink); }
 .button:hover { background: #d3ff97; }
 .text-link, .back-link { color: #bdc5be; font-size: 14px; text-decoration: none; }
 .signal-card { border: 1px solid var(--line); background: linear-gradient(145deg, #151b16, #0c100d); box-shadow: 0 30px 100px rgba(0,0,0,.34); }
-.signal-head, .signal-footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; font: 12px "IBM Plex Mono", monospace; }
+.signal-head, .signal-.history { margin-top: 24px; padding: 28px; border: 1px solid var(--line); background: var(--panel); }
+.history h3 { margin: 30px 0 12px; font-size: 14px; }
+.history ul, .history ol { margin: 0; padding: 0; list-style: none; }
+.history-window { color: var(--muted); font: 12px "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
+.history-notice { display: grid; gap: 6px; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); font-size: 14px; line-height: 1.6; }
+.history-notice span { color: var(--muted); }
+.history-info { border-color: var(--green-dim); }
+.history-warning { border-color: var(--red); }
+.history-warning strong { color: var(--red); }
+.history-coverage { margin-top: 12px !important; color: var(--red); font-size: 13px; line-height: 1.7; }
+.history-resource, .history-event { display: grid; gap: 4px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.history-event { grid-template-columns: minmax(0, 220px) 1fr; gap: 16px; }
+.history-event time { color: var(--muted); font: 12px "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
+.history small, .history-lifecycle { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.history-uid { justify-self: start; color: var(--green); font: 12px "IBM Plex Mono", monospace; }
+.history-uid-missing { color: var(--red); }
+
+footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; font: 12px "IBM Plex Mono", monospace; }
 .signal-head { border-bottom: 1px solid var(--line); }
 .signal-card dl { margin: 0; padding: 12px 20px; }
 .signal-card dl div { display: grid; grid-template-columns: 100px 1fr; gap: 16px; padding: 15px 0; border-bottom: 1px solid #202720; }
@@ -173,6 +190,7 @@ footer strong { color: var(--ink); }
   .flow-grid h3 { margin-top: 25px; }
   .flow-grid p { min-height: 0; }
   .pipeline { grid-template-columns: 1fr; }
+  .history-event { grid-template-columns: 1fr; gap: 4px; }
   .pipeline li { min-height: 90px; border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
