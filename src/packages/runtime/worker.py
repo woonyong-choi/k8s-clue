@@ -226,24 +226,22 @@ class DeadLetterPort(Protocol):
 class EventProcessor:
     def __init__(
         self,
-        service_name: str,
+        spec: EventHandlerSpec,
         handler: EventHandler,
         store: EventProcessingStore,
         dead_letters: DeadLetterPort,
-        retry_policy: EventRetryPolicy,
         codec: Codec | None = None,
         ledger: Ledger | None = None,
-        consumers: dict[str, str] | None = None,
     ) -> None:
-        self.service_name = service_name
-        self.consumers = dict(consumers or {})
+        self.service_name = spec.service_name
+        self.retry_policy = spec.retry_policy
+        self.consumers = dict(spec.consumers)
         self.ledgers: dict[str, Ledger] = {}
         self.handler = handler
         self.store = store
         self.dead_letters = dead_letters
-        self.retry_policy = retry_policy
         self.codec = codec if codec is not None else JsonCodec()
-        self.ledger = ledger if ledger is not None else Ledger(store, service_name)
+        self.ledger = ledger if ledger is not None else Ledger(store, self.service_name)
 
     def consumer_for(self, evt: EventEnvelope) -> str:
         return self.consumers.get(evt.subject, self.service_name)
@@ -438,12 +436,10 @@ class WorkerRuntime:
         events = RecordedEventClient(self.bus, self.db)
         handler = self.spec.handler_factory(events, self.db)
         processor = EventProcessor(
-            self.spec.service_name,
+            self.spec,
             handler,
             self.db,
             DeadLetterSink(events, self.db, self.spec.service_name),
-            self.spec.retry_policy,
-            consumers=dict(self.spec.consumers),
         )
         relay = OutboxRelay(self.db, self.bus, self.spec.service_name)
         stopping = asyncio.Event()

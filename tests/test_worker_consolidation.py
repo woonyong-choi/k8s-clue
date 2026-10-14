@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -174,14 +175,15 @@ def make_processor(
     service: str = "ai/rca-worker",
     max_attempts: int = 3,
 ) -> EventProcessor:
-    spec = load_service(service).app.handler_spec()
+    spec = dataclasses.replace(
+        load_service(service).app.handler_spec(),
+        retry_policy=EventRetryPolicy(max_attempts=max_attempts, retry_delay_seconds=0),
+    )
     return EventProcessor(
-        spec.service_name,
+        spec,
         handler,  # type: ignore[arg-type]
         store,  # type: ignore[arg-type]
         FakeDeadLetters(store),
-        EventRetryPolicy(max_attempts=max_attempts, retry_delay_seconds=0),
-        consumers=dict(spec.consumers),
     )
 
 
