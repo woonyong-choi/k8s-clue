@@ -52,7 +52,7 @@ export function IncidentHistory({ state }: { state: HistoryState }) {
   const notice = describeCompleteness(history);
   return (
     <section className="history" aria-label="사건 이력">
-      <div className="card-head">
+      <div className="card-head history-head">
         <span className="eyebrow">HISTORY</span>
         <span className="history-window">{formatWindow(history)}</span>
       </div>
@@ -148,7 +148,7 @@ function ResourceItem({ resource }: { resource: HistoryResource }) {
       {resource.deleted_at ? (
         <small className="history-note">
           {resource.deleted_at_bound === "gap_bounded"
-            ? `삭제 시각 불확정: 수집 공백 뒤 첫 관측 ${resource.deleted_at}`
+            ? `삭제 시각 불확정: 삭제를 직접 관측하지 못했고 ${resource.deleted_at}이 상한이다`
             : `삭제 관측 ${resource.deleted_at}`}
         </small>
       ) : null}
@@ -178,7 +178,7 @@ function EventItem({ event }: { event: HistoryEvent }) {
 function UidBadge({ subject }: { subject: HistorySubject }) {
   if (subject.kind === "resource") {
     const { uid } = subject.resource;
-    return <code className="history-uid" title={uid}>UID {uid.slice(0, 8)}</code>;
+    return <code className="history-uid">UID {uid}</code>;
   }
   if (subject.kind === "inventory_locator") {
     return <code className="history-uid history-uid-missing">UID 미수집</code>;

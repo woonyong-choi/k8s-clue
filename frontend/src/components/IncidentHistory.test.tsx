@@ -78,9 +78,27 @@ describe("IncidentHistory", () => {
         },
       ],
     }));
-    expect(html).toContain("UID 11111111");
-    expect(html).toContain("UID 22222222");
+    expect(html).toContain(`UID ${UID_OLD}`);
+    expect(html).toContain(`UID ${UID_NEW}`);
     expect(html.match(/class="history-resource"/gu)).toHaveLength(2);
+  });
+
+  it("uids_sharing_a_long_prefix_stay_distinguishable", () => {
+    const html = render(history({
+      resources: [
+        {
+          subject: resourceSubject("uid-api-old"), lifecycle: "deleted",
+          first_observed_at: null, last_observed_at: null,
+          deleted_at: "2023-11-14T22:10:00Z", deleted_at_bound: "gap_bounded",
+        },
+        {
+          subject: resourceSubject("uid-api-new"), lifecycle: "present",
+          first_observed_at: null, last_observed_at: null, deleted_at: null, deleted_at_bound: null,
+        },
+      ],
+    }));
+    expect(html).toContain("UID uid-api-old");
+    expect(html).toContain("UID uid-api-new");
   });
 
   it("locator_without_uid_is_marked_uncollected_and_gap_bound_deletion_is_uncertain", () => {
