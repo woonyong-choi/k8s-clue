@@ -23,6 +23,7 @@ from domains.identity.dependencies import (
     require_cluster_agent,
 )
 from domains.identity.router import router as identity_router
+from domains.rca.history_router import router as incident_history_router
 from domains.rca.query_router import router as rca_query_router
 from domains.rca.router import router as rca_router
 from domains.rca_bundle.router import router as rca_bundle_router
@@ -357,6 +358,7 @@ class ApiGateway:
         app.include_router(rca_router)
         app.include_router(rca_query_router)
         app.include_router(rca_bundle_router)
+        app.include_router(incident_history_router)
         self._register_dead_letter_routes(app)
         self._register_metrics_routes(app)
         self._register_error_handler(app)
