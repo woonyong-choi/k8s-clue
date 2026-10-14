@@ -305,6 +305,8 @@ MALFORMED_COLLECTOR_LISTS: dict[str, dict[str, Any]] = {
         "kyro_collection_status": {"observed": True, "reason_codes": ["collection_rbac_denied"]}
     },
     "status_reasons_int": {"kyro_collection_status": {"observed": True, "reason_codes": 7}},
+    "remaining_negative": {"metadata": {"remainingItemCount": -1}},
+    "remaining_float": {"metadata": {"remainingItemCount": 2.0}},
 }
 
 
@@ -321,7 +323,19 @@ def test_a_malformed_collector_list_deletes_nothing_through_the_ingress(
     _assert_observed_but_nothing_deleted(harness, status)
 
 
-@pytest.mark.parametrize("junk", ["x", 7, {"lists": 7}, [], True])
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "x",
+        7,
+        {"lists": 7},
+        [],
+        True,
+        {"truncated": True, "lists": {}},
+        {"truncated": "bad", "lists": {}},
+        {"truncated": False, "lists": {"events": {}}},
+    ],
+)
 def test_junk_collection_limits_at_the_ingress_never_return_500(
     harness: Harness, junk: Any
 ) -> None:
@@ -334,3 +348,18 @@ def test_junk_collection_limits_at_the_ingress_never_return_500(
 
     assert status == 200
     assert not [event for event in harness.events() if event[0] == "delete"]
+
+
+def test_limits_that_name_only_other_lists_keep_a_valid_pod_proof(harness: Harness) -> None:
+    harness.collect(20, {"default": pod_list(pod("a", uid="ua"))})
+
+    def other_list_limited(kubernetes: dict) -> None:
+        kubernetes["collection_limits"] = {
+            "truncated": True,
+            "lists": {"events": {"truncated": True, "original_count": 900, "returned_count": 200}},
+        }
+
+    harness.collect(10, {"default": pod_list()}, transform=other_list_limited)
+
+    assert ("delete", "ua") in harness.events()
+    assert harness.lifecycle()["ua"] == ("deleted", "observed")

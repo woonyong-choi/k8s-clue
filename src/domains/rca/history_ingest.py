@@ -118,72 +118,92 @@ def _pod_coverage(kubernetes: Mapping[str, Any]) -> list[JsonObject]:
     return entries
 
 
+PROOF_FLAGS = ("observed", "complete", "delete_safe", "truncated")
+
+
 def _proof_entry(entry: Mapping[str, Any], namespace: str) -> JsonObject:
     """Copy one producer entry; anything that is not exactly well typed grants no deletion.
 
-    Flags must be real booleans and the reasons a list of strings.  A wrong type is never
-    normalized into "no reason" or "false": the entry is kept as an observation record with
-    its authority removed, so the evidence is still stored.
+    A wrong type is never normalized into "no reason" or "false": the entry is kept as an
+    observation record with its authority removed, so the evidence is still stored.
     """
-    flags = {key: entry.get(key) for key in ("observed", "complete", "delete_safe", "truncated")}
+    if _is_well_typed(entry) and _grants_deletion(entry):
+        return _entry(namespace, observed=True, complete=True, truncated=False, reasons=[])
+    return _unauthorized_entry(entry, namespace)
+
+
+def _is_well_typed(entry: Mapping[str, Any]) -> bool:
+    flags_are_bool = all(isinstance(entry.get(key), bool) for key in PROOF_FLAGS)
     reasons = entry.get("reason_codes")
+    reasons_are_text = isinstance(reasons, list) and all(isinstance(r, str) for r in reasons)
     selector = entry.get("label_selector")
-    well_typed = (
-        all(isinstance(value, bool) for value in flags.values())
-        and isinstance(reasons, list)
-        and all(isinstance(code, str) for code in reasons)
-        and (selector is None or isinstance(selector, str))
+    selector_is_text = selector is None or isinstance(selector, str)
+    return flags_are_bool and reasons_are_text and selector_is_text
+
+
+def _grants_deletion(entry: Mapping[str, Any]) -> bool:
+    proved = entry["observed"] and entry["complete"] and entry["delete_safe"]
+    clean = not entry["truncated"] and not entry["reason_codes"] and not entry["label_selector"]
+    return bool(proved and clean)
+
+
+def _unauthorized_entry(entry: Mapping[str, Any], namespace: str) -> JsonObject:
+    reasons = entry.get("reason_codes")
+    named = (
+        sorted({code for code in reasons if isinstance(code, str)}) if _is_well_typed(entry) else []
     )
-    authoritative = (
-        well_typed
-        and flags["complete"]
-        and flags["delete_safe"]
-        and flags["observed"]
-        and not flags["truncated"]
-        and not reasons
-        and not selector
+    return _entry(
+        namespace,
+        observed=entry.get("observed") is True,
+        complete=False,
+        truncated=entry.get("truncated") is not False,
+        reasons=named or [INVALID_PROOF_REASON],
+        label_selector=entry.get("label_selector"),
     )
-    if authoritative:
-        return {
-            "collection": POD_COLLECTION,
-            "scope": "namespace",
-            "namespace": namespace,
-            "observed": True,
-            "complete": True,
-            "delete_safe": True,
-            "truncated": False,
-            "label_selector": None,
-            "reason_codes": [],
-        }
+
+
+def _entry(
+    namespace: str,
+    *,
+    observed: bool,
+    complete: bool,
+    truncated: bool,
+    reasons: list[str],
+    label_selector: object = None,
+) -> JsonObject:
+    selector = label_selector if isinstance(label_selector, str) and label_selector else None
     return {
         "collection": POD_COLLECTION,
         "scope": "namespace",
         "namespace": namespace,
-        "observed": flags["observed"] is True,
-        "complete": False,
-        "delete_safe": False,
-        "truncated": flags["truncated"] is not False,
-        "label_selector": selector if isinstance(selector, str) and selector else None,
-        "reason_codes": sorted(
-            {code for code in reasons if isinstance(code, str)}
-            if isinstance(reasons, list) and well_typed
-            else {INVALID_PROOF_REASON}
-        )
-        or [INVALID_PROOF_REASON],
+        "observed": observed,
+        "complete": complete,
+        "delete_safe": complete,
+        "truncated": truncated,
+        "label_selector": selector,
+        "reason_codes": reasons,
     }
 
 
 def _pod_list_limited(kubernetes: Mapping[str, Any]) -> bool:
-    """True when the payload reports, or cannot be trusted to deny, a limited Pod list."""
+    """True when the payload reports, or cannot be trusted to deny, a limited Pod list.
+
+    Only a consistent report that names other lists leaves the Pod proof standing: an
+    untyped flag, a flag that contradicts its list, or any unknown shape cannot say that
+    no Pod was dropped.
+    """
     if "collection_limits" not in kubernetes:
         return False
     limits = kubernetes["collection_limits"]
     if not isinstance(limits, Mapping):
         return True
+    truncated = limits.get("truncated")
     lists = limits.get("lists")
-    if lists is None:
-        return limits.get("truncated") is not False and bool(limits)
-    return not isinstance(lists, Mapping) or POD_COLLECTION in lists
+    if not isinstance(truncated, bool) or not isinstance(lists, Mapping):
+        return True
+    if truncated != bool(lists):
+        return True
+    return POD_COLLECTION in lists
 
 
 def _pod_resources(value: object) -> list[JsonObject]:

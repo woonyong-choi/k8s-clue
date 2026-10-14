@@ -817,7 +817,20 @@ def test_a_non_list_or_junk_coverage_value_is_ignored_without_error(junk: Any) -
     assert "scoped_coverage_authority" not in payload["summary"]
 
 
-@pytest.mark.parametrize("limits", ["x", 7, {"lists": 7}, {"lists": []}, [], True])
+CONTRADICTORY_LIMITS = [
+    {"truncated": True, "lists": {}},
+    {"truncated": "bad", "lists": {}},
+    {"truncated": "bad", "lists": {"events": {}}},
+    {"truncated": False, "lists": {"events": {}}},
+    {"truncated": True},
+    {"lists": {}},
+    {},
+]
+
+
+@pytest.mark.parametrize(
+    "limits", ["x", 7, {"lists": 7}, {"lists": []}, [], True, *CONTRADICTORY_LIMITS]
+)
 def test_junk_collection_limits_drop_every_proof_without_error(limits: Any) -> None:
     payload = evidence_inventory_payload(
         _kubernetes(collection_coverage=[_pod_coverage()], collection_limits=limits)

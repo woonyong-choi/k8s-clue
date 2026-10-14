@@ -2070,17 +2070,23 @@ def pod_collection_coverage(
         if _list_is_continued(pod_payload):
             truncated = True
             reasons.add(COVERAGE_REASON_CONTINUATION)
-        for row in pod_payload["items"]:
-            row_meta = row.get("metadata")
-            name = row_meta.get("name") if isinstance(row_meta, dict) else None
-            uid = row_meta.get("uid") if isinstance(row_meta, dict) else None
-            if not (isinstance(name, str) and name and isinstance(uid, str) and uid):
-                reasons.add(COVERAGE_REASON_IDENTITY_MISSING)
-            if not isinstance(row_meta, dict) or row_meta.get("namespace") != namespace:
-                reasons.add(COVERAGE_REASON_NAMESPACE_MISMATCH)
+        reasons.update(_row_reasons(pod_payload["items"], namespace))
     if label_selector:
         reasons.add(COVERAGE_REASON_LABEL_SELECTOR)
     complete = observed and not truncated and not reasons
+    return _pod_coverage_entry(
+        namespace, label_selector, observed, complete, truncated, sorted(reasons)
+    )
+
+
+def _pod_coverage_entry(
+    namespace: str,
+    label_selector: str | None,
+    observed: bool,
+    complete: bool,
+    truncated: bool,
+    reasons: list[str],
+) -> JsonObject:
     return {
         "collection": K8S_RESOURCE_PODS,
         "scope": "namespace",
@@ -2090,8 +2096,22 @@ def pod_collection_coverage(
         "delete_safe": complete,
         "truncated": truncated,
         "label_selector": label_selector or None,
-        "reason_codes": sorted(reasons),
+        "reason_codes": reasons,
     }
+
+
+def _row_reasons(rows: list[dict[str, Any]], namespace: str) -> set[str]:
+    """Reasons a row breaks the proof: no string name and uid, or another namespace."""
+    reasons: set[str] = set()
+    for row in rows:
+        meta = row.get("metadata")
+        meta = meta if isinstance(meta, dict) else {}
+        for key in ("name", "uid"):
+            if not isinstance(meta.get(key), str) or not meta[key]:
+                reasons.add(COVERAGE_REASON_IDENTITY_MISSING)
+        if meta.get("namespace") != namespace:
+            reasons.add(COVERAGE_REASON_NAMESPACE_MISMATCH)
+    return reasons
 
 
 def _well_formed_pod_list(pod_payload: object) -> bool:
@@ -2111,7 +2131,12 @@ def _well_formed_pod_list(pod_payload: object) -> bool:
     if next_token is not None and not isinstance(next_token, str):
         return False
     remaining = list_meta.get("remainingItemCount")
-    return remaining is None or (isinstance(remaining, int | float) and not isinstance(remaining, bool))
+    return remaining is None or _is_item_count(remaining)
+
+
+def _is_item_count(value: object) -> bool:
+    """A real count: an integer, never a bool, and never negative."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _list_is_continued(pod_payload: dict[str, Any]) -> bool:

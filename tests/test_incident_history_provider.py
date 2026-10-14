@@ -311,6 +311,8 @@ MALFORMED_LISTS = {
     "metadata_list": {"metadata": []},
     "remaining_string": {"metadata": {"remainingItemCount": "invalid"}},
     "remaining_bool": {"metadata": {"remainingItemCount": True}},
+    "remaining_negative": {"metadata": {"remainingItemCount": -1}},
+    "remaining_float": {"metadata": {"remainingItemCount": 2.0}},
     "continue_int": {"metadata": {"continue": 7}},
     "status_not_object": {"kyro_collection_status": "bad"},
     "status_observed_string": {"kyro_collection_status": {"observed": "yes", "reason_codes": []}},
@@ -359,3 +361,11 @@ def test_a_row_with_wrongly_typed_identity_is_never_proof(module: Any, row: dict
     snapshot = collect(module, {"default": pod_list(row)})
 
     assert_not_delete_proof(entries(snapshot)["default"])
+
+
+def test_a_zero_remaining_count_is_still_a_complete_list(module: Any) -> None:
+    listing = pod_list(pod("api-0", uid="u1"), metadata={"remainingItemCount": 0, "continue": ""})
+
+    entry = entries(collect(module, {"default": listing}))["default"]
+
+    assert entry["complete"] is True and entry["reason_codes"] == []
