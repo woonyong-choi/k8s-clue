@@ -5,6 +5,8 @@ import type {
   HistorySubject,
   IncidentHistory as IncidentHistoryData,
 } from "../api";
+import "../../tokens/tokens.css";
+import "./incident-history.css";
 
 export type HistoryState =
   | { kind: "loading" }
@@ -55,11 +57,11 @@ export function IncidentHistory({ state }: { state: HistoryState }) {
         <span className="history-window">{formatWindow(history)}</span>
       </div>
       <div className={`history-notice history-${notice.tone}`} role="status">
-        <strong>{notice.title}</strong>
-        <span>{notice.detail}</span>
+        <strong className="history-notice-title">{notice.title}</strong>
+        <span className="history-notice-detail">{notice.detail}</span>
       </div>
       {history.completeness.coverage.length > 0 ? (
-        <ul className="history-coverage" aria-label="수집 공백">
+        <ul className="history-list history-coverage" aria-label="수집 공백">
           {history.completeness.coverage.map((item) => (
             <li key={`${item.source}-${item.reason}-${item.from_ms}`}>
               {item.source} · {REASON_LABELS[item.reason]} · {formatMs(item.from_ms)} ~ {formatMs(item.to_ms)}
@@ -68,21 +70,21 @@ export function IncidentHistory({ state }: { state: HistoryState }) {
         </ul>
       ) : null}
 
-      <h3>리소스</h3>
+      <h3 className="history-heading">리소스</h3>
       {history.resources.length > 0 ? (
-        <ul className="history-resources">
+        <ul className="history-list">
           {history.resources.map((resource, index) => (
             <ResourceItem key={`${resourceKey(resource.subject)}-${index}`} resource={resource} />
           ))}
         </ul>
-      ) : <p className="muted">표시할 리소스 항목이 없습니다.</p>}
+      ) : <p className="history-empty">표시할 리소스 항목이 없습니다.</p>}
 
-      <h3>이벤트 (서버 시간 순서)</h3>
+      <h3 className="history-heading">이벤트 (서버 시간 순서)</h3>
       {history.events.length > 0 ? (
-        <ol className="history-events">
+        <ol className="history-list">
           {history.events.map((event) => <EventItem key={event.event_id} event={event} />)}
         </ol>
-      ) : <p className="muted">이 창에 표시할 이벤트가 없습니다.</p>}
+      ) : <p className="history-empty">이 창에 표시할 이벤트가 없습니다.</p>}
     </section>
   );
 }
@@ -140,11 +142,11 @@ function ResourceItem({ resource }: { resource: HistoryResource }) {
       <strong>{subjectLabel(subject)}</strong>
       <UidBadge subject={subject} />
       <span className="history-lifecycle">{LIFECYCLE_LABELS[resource.lifecycle]}</span>
-      <small>
+      <small className="history-note">
         첫 관측 {resource.first_observed_at ?? "—"} · 마지막 관측 {resource.last_observed_at ?? "—"}
       </small>
       {resource.deleted_at ? (
-        <small>
+        <small className="history-note">
           {resource.deleted_at_bound === "gap_bounded"
             ? `삭제 시각 불확정: 수집 공백 뒤 첫 관측 ${resource.deleted_at}`
             : `삭제 관측 ${resource.deleted_at}`}
@@ -158,15 +160,15 @@ function EventItem({ event }: { event: HistoryEvent }) {
   const metadata = visibleMetadata(event.metadata);
   return (
     <li className="history-event">
-      <time dateTime={event.occurred_at}>{event.occurred_at}</time>
-      <div>
+      <time className="history-time" dateTime={event.occurred_at}>{event.occurred_at}</time>
+      <div className="history-event-body">
         <strong>{event.title}</strong>
-        <small>
+        <small className="history-note">
           {event.source} · {event.event_type} · {event.severity} · {subjectLabel(event.subject)}
         </small>
         <UidBadge subject={event.subject} />
         {metadata.length > 0 ? (
-          <small>{metadata.map(([key, value]) => `${key}=${value}`).join(" · ")}</small>
+          <small className="history-note">{metadata.map(([key, value]) => `${key}=${value}`).join(" · ")}</small>
         ) : null}
       </div>
     </li>
@@ -189,8 +191,8 @@ function HistoryPanel({ title, detail, tone }: { title: string; detail?: string;
     <section className="history" aria-label="사건 이력">
       <span className="eyebrow">HISTORY</span>
       <div className={`history-notice history-${tone ?? "info"}`} role="status">
-        <strong>{title}</strong>
-        {detail ? <span>{detail}</span> : null}
+        <strong className="history-notice-title">{title}</strong>
+        {detail ? <span className="history-notice-detail">{detail}</span> : null}
       </div>
     </section>
   );
