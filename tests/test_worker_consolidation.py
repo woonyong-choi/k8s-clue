@@ -15,7 +15,12 @@ from packages.contracts.interfaces import EventProcessingRecord
 from packages.events.envelope import event
 from packages.runtime import controller
 from packages.runtime.discovery import discover_services
-from packages.runtime.worker import EventHandlerSpec, EventProcessor, EventRetryPolicy
+from packages.runtime.worker import (
+    EventHandlerSpec,
+    EventProcessor,
+    EventRetryPolicy,
+    WorkerRuntime,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MERGED_AWAY = ("analyze-worker", "plan-worker", "select-worker", "dispatch-worker")
@@ -266,3 +271,89 @@ def test_merged_subjects_are_not_consumed_by_other_workers() -> None:
             continue
         module = load_service(service.path.parent.relative_to("src/services").as_posix())
         assert owned.isdisjoint(module.app.handler_spec().subjects), service.name
+
+
+class FakeRuntimeStore(FakeStore):
+    """WorkerRuntime.run 이 요구하는 저장소 표면까지 갖춘 가짜."""
+
+    async def unsent_events(self, batch: int, source: str | None) -> list[EventEnvelope]:
+        return []
+
+
+class FakeSubscription:
+    def __init__(self, messages: list[FakeMessage]) -> None:
+        self.messages = messages
+
+    async def fetch(self, batch: int, timeout: float | None = None) -> list[FakeMessage]:
+        if self.messages:
+            return [self.messages.pop(0)]
+        await asyncio.sleep(0.01)
+        raise TimeoutError
+
+
+class FakeBus:
+    def __init__(self, inbox: dict[str, list[FakeMessage]]) -> None:
+        self.inbox = inbox
+        self.durables: dict[str, str] = {}
+
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def subscribe(self, subject: str, durable: str) -> FakeSubscription:
+        self.durables[subject] = durable
+        return FakeSubscription(self.inbox.get(subject, []))
+
+    async def publish_envelope(self, evt: EventEnvelope) -> EventEnvelope:
+        return evt
+
+
+async def run_worker_runtime(
+    runtime: WorkerRuntime,
+    messages: list[FakeMessage],
+) -> None:
+    task = asyncio.create_task(runtime.run())
+    for _ in range(300):
+        if all(m.acks + m.naks for m in messages) or task.done():
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    ("service", "subject", "legacy"),
+    [
+        (service, subject, legacy)
+        for service, mapping in sorted(LEGACY_CONSUMERS.items())
+        for subject, legacy in mapping.items()
+    ],
+)
+def test_worker_runtime_skips_event_processed_before_merge(
+    service: str,
+    subject: str,
+    legacy: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def no_wait(db: object) -> None:
+        return None
+
+    monkeypatch.setattr("packages.storage.database.wait_for_database", no_wait)
+    monkeypatch.setattr("packages.runtime.worker.HEARTBEAT_PATH", str(tmp_path / "heartbeat"))
+    store = FakeRuntimeStore()
+    evt = evt_for(subject)
+    store.ledger[(evt.event_id, legacy)] = (EventProcessingStatus.PROCESSED, 1)
+    message = FakeMessage(evt)
+    bus = FakeBus({subject: [message]})
+    spec = load_service(service).app.handler_spec()
+
+    asyncio.run(run_worker_runtime(WorkerRuntime(spec, bus=bus, db=store), [message]))  # type: ignore[arg-type]
+
+    assert bus.durables[subject] == legacy
+    assert message.acks == 1
+    assert message.naks == 0
+    assert store.staged == []
+    assert set(store.ledger) == {(evt.event_id, legacy)}

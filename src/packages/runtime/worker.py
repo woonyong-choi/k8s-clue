@@ -443,6 +443,7 @@ class WorkerRuntime:
             self.db,
             DeadLetterSink(events, self.db, self.spec.service_name),
             self.spec.retry_policy,
+            consumers=dict(self.spec.consumers),
         )
         relay = OutboxRelay(self.db, self.bus, self.spec.service_name)
         stopping = asyncio.Event()
