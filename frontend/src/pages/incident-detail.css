@@ -1,0 +1,10 @@
+/* 사건 상세 페이지 전용 보정. 공백 없는 긴 원인, UID, ID가 좁은 화면에서 문서 폭을 넘지 않게 한다. */
+
+.incident-detail-fit {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.incident-detail-meta {
+  flex-wrap: wrap;
+}

@@ -7,6 +7,7 @@ import {
 } from "../api";
 import { IncidentHistory, type HistoryState } from "../components/IncidentHistory";
 import type { AppRoute } from "../router";
+import "./incident-detail.css";
 
 const PIPELINE = [
   ["Evidence", "보존된 Kubernetes 상태"],
@@ -58,11 +59,11 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
     <section className="page detail-page">
       <a className="back-link" href="/incidents">← Incidents</a>
       <div className="detail-heading">
-        <div>
+        <div className="incident-detail-fit">
           <span className="eyebrow">CORRELATION</span>
           <h1>{bundle.meta.correlation_id}</h1>
         </div>
-        <div className="detail-meta">
+        <div className="detail-meta incident-detail-fit incident-detail-meta">
           <span>{bundle.meta.cluster_id}</span>
           <span>{bundle.meta.incident_id ?? "incident pending"}</span>
         </div>
@@ -79,7 +80,7 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
       </ol>
 
       <div className="detail-grid">
-        <article className="detail-card diagnosis">
+        <article className="detail-card diagnosis incident-detail-fit">
           <span className="eyebrow">ROOT CAUSE</span>
           <h2>{bundle.diagnosis.root_cause}</h2>
           <div className="confidence">
@@ -100,7 +101,7 @@ export default function IncidentDetailPage({ route }: { route: AppRoute }) {
           ) : null}
         </article>
 
-        <article className="detail-card remediation">
+        <article className="detail-card remediation incident-detail-fit">
           <div className="card-head">
             <span className="eyebrow">SAFE CHANGE</span>
             <span className="status status-open">{bundle.remediation?.status ?? "PENDING"}</span>
