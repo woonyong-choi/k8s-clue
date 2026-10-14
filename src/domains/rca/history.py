@@ -291,7 +291,11 @@ def _deletion_bound(
 ) -> Literal["observed", "gap_bounded"]:
     deleted_ms = int(deleted_at.timestamp() * 1_000)
     for gap in gaps:
-        if gap.from_ms <= deleted_ms <= gap.to_ms:
+        if gap.reason != "collection_gap":
+            continue  # a partial cut was still observed; only unobserved time bounds a deletion
+        # A deletion seen at the observation that opens a gap is exact; one seen when the
+        # collector returns after the gap is only an upper bound.
+        if gap.from_ms < deleted_ms <= gap.to_ms:
             return "gap_bounded"
     return "observed"
 

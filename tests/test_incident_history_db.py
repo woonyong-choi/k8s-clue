@@ -290,7 +290,32 @@ def test_ledger_row_written_before_a_later_failure_is_rolled_back(
 
 SYNTHETIC_WORKSPACE = "synthetic-ws"
 SYNTHETIC_CLUSTER = "synthetic-cluster"
-SYNTHETIC_CASES = ("syn-complete", "syn-gap", "syn-nodata")
+SYNTHETIC_CASES = (
+    "syn-complete",
+    "syn-gap",
+    "syn-nodata",
+    "syn-complete-empty",
+    "syn-truncated",
+    "syn-source-unavailable",
+    "syn-history-fail",
+    "syn-history-404",
+)
+# Cases whose history is answered by an injected fault while the bundle stays 200.
+SYNTHETIC_INJECTED_HISTORY_FAULTS = {"syn-history-fail": 503, "syn-history-404": 404}
+# Grants fixed per case so a browser, which cannot send headers, still sees them.
+SYNTHETIC_CASE_GRANTS = {"syn-source-unavailable": "rca.read,inventory.read"}
+SYNTHETIC_EMPTY_CLUSTER = "synthetic-empty-cluster"
+SYNTHETIC_TRUNCATED_CLUSTER = "synthetic-truncated-cluster"
+SYNTHETIC_CASE_CLUSTERS = {
+    "syn-complete": SYNTHETIC_CLUSTER,
+    "syn-gap": "synthetic-gap-cluster",
+    "syn-nodata": "synthetic-nodata-cluster",
+    "syn-complete-empty": SYNTHETIC_EMPTY_CLUSTER,
+    "syn-truncated": SYNTHETIC_TRUNCATED_CLUSTER,
+    "syn-source-unavailable": SYNTHETIC_CLUSTER,
+    "syn-history-fail": SYNTHETIC_CLUSTER,
+    "syn-history-404": SYNTHETIC_CLUSTER,
+}
 
 
 def _event_capture_summary(observed_at: datetime) -> dict:
@@ -352,11 +377,20 @@ def seed_synthetic(db: Any, *, now: datetime | None = None) -> dict[str, datetim
     gap_scope = (SYNTHETIC_WORKSPACE, "synthetic-gap-cluster")
     _save(db, gap_scope, _synthetic_cut(start, [("api-0", "uid-gap-a")]))
     _save(db, gap_scope, _synthetic_cut(start + timedelta(minutes=50), [("api-0", "uid-gap-b")]))
-    for case, cluster in (
-        ("syn-complete", SYNTHETIC_CLUSTER),
-        ("syn-gap", "synthetic-gap-cluster"),
-        ("syn-nodata", "synthetic-nodata-cluster"),
-    ):
+    # A steady cluster: complete cuts cover the whole window and nothing changes inside it,
+    # so the history is complete and empty (the first cut predates the window).
+    empty_scope = (SYNTHETIC_WORKSPACE, SYNTHETIC_EMPTY_CLUSTER)
+    for step in range(19):
+        at = anchor - timedelta(minutes=75) + timedelta(minutes=5 * step)
+        _save(db, empty_scope, _synthetic_cut(at, [("steady-0", "uid-steady")]))
+    # More new Pods in one cut than the history returns, so the response is truncated.
+    flood = [(f"burst-{index}", f"uid-burst-{index}") for index in range(210)]
+    _save(
+        db,
+        (SYNTHETIC_WORKSPACE, SYNTHETIC_TRUNCATED_CLUSTER),
+        _synthetic_cut(anchor - timedelta(minutes=20), flood),
+    )
+    for case, cluster in SYNTHETIC_CASE_CLUSTERS.items():
         db.save_rca_report(
             case,
             SYNTHETIC_WORKSPACE,
@@ -424,6 +458,7 @@ def serve_synthetic(port: int) -> None:
 
     import uvicorn
     from fastapi import FastAPI, HTTPException
+    from fastapi.responses import JSONResponse
 
     from domains.rca import history_router
     from domains.rca_bundle import router as rca_bundle_router
@@ -453,8 +488,24 @@ def serve_synthetic(port: int) -> None:
             request.scope["path"] = path[4:]
         return await call_next(request)
 
+    @app.middleware("http")
+    async def inject_history_fault(request: Request, call_next):
+        # 주입된 오류: bundle은 정상이고 이 사례의 history 조회만 실패한다.
+        parts = request.scope["path"].strip("/").split("/")
+        if parts[:1] == ["api"]:
+            parts = parts[1:]
+        if len(parts) == 3 and parts[0] == "incidents" and parts[2] == "history":
+            status = SYNTHETIC_INJECTED_HISTORY_FAULTS.get(parts[1])
+            if status is not None:
+                return JSONResponse(
+                    status_code=status, content={"detail": "synthetic injected history fault"}
+                )
+        return await call_next(request)
+
     async def synthetic_session(request: Request) -> Any:
-        raw = request.headers.get("x-synthetic-grants", "rca.read,inventory.read,evidence.read")
+        case_grants = SYNTHETIC_CASE_GRANTS.get(str(request.path_params.get("correlation_id")))
+        default = case_grants or "rca.read,inventory.read,evidence.read"
+        raw = request.headers.get("x-synthetic-grants", default)
         return SimpleNamespace(
             workspace_id=SYNTHETIC_WORKSPACE,
             user_id="synthetic-user",
@@ -636,6 +687,18 @@ def _ingest(db: Any, scope: tuple[str, str], key: str, kubernetes: dict, **extra
     )
 
 
+def _first_observed_flags(db: Any, workspace_id: str) -> list[bool]:
+    with db.connection() as conn:
+        rows = conn.execute(
+            text(
+                "select metadata->>'observation_basis' as basis from timeline_events "
+                "where workspace_id = :w and source = 'inventory' order by sequence"
+            ),
+            {"w": workspace_id},
+        ).all()
+    return [row.basis == "first_observed" for row in rows]
+
+
 def _ledger_rows(db: Any, workspace_id: str) -> list[tuple[str, str, str | None]]:
     with db.connection() as conn:
         rows = conn.execute(
@@ -650,11 +713,16 @@ def _ledger_rows(db: Any, workspace_id: str) -> list[tuple[str, str, str | None]
 
 def test_evidence_ingest_records_uid_change_as_an_update(db: Any, scope: tuple[str, str]) -> None:
     _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-old"))
-    assert _ledger_rows(db, scope[0]) == []  # the first scoped cut proves no addition
+    # The first scoped cut is kept as an observation, never as a creation.
+    assert _ledger_rows(db, scope[0]) == [("inventory", "add", "uid-old")]
+    assert _first_observed_flags(db, scope[0]) == [True]
 
     _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
 
-    assert _ledger_rows(db, scope[0]) == [("inventory", "update", "uid-new")]
+    assert _ledger_rows(db, scope[0]) == [
+        ("inventory", "add", "uid-old"),
+        ("inventory", "update", "uid-new"),
+    ]
     assert _snapshot_count(db, scope[0]) == 2
 
 
@@ -666,7 +734,10 @@ def test_resent_evidence_adds_no_snapshot_or_ledger_fact(db: Any, scope: tuple[s
 
     assert again["duplicate"] is True
     assert _snapshot_count(db, scope[0]) == 2
-    assert _ledger_rows(db, scope[0]) == [("inventory", "update", "uid-new")]
+    assert _ledger_rows(db, scope[0]) == [
+        ("inventory", "add", "uid-old"),
+        ("inventory", "update", "uid-new"),
+    ]
 
 
 def test_scoped_evidence_never_deletes_what_it_does_not_list(
@@ -676,7 +747,7 @@ def test_scoped_evidence_never_deletes_what_it_does_not_list(
 
     _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-1", pods=False))
 
-    assert _ledger_rows(db, scope[0]) == []
+    assert _ledger_rows(db, scope[0]) == [("inventory", "add", "uid-1")]
     assert (
         _count(
             db,
@@ -722,7 +793,7 @@ def test_failure_after_the_snapshot_rolls_back_window_snapshot_and_ledger(
         _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
 
     assert _snapshot_count(db, scope[0]) == 1
-    assert _ledger_rows(db, scope[0]) == []
+    assert _ledger_rows(db, scope[0]) == [("inventory", "add", "uid-old")]
     assert _evidence_rows(db, _scoped_key(scope, "e-2")) == (0, 0)
 
 
@@ -795,8 +866,16 @@ def test_public_http_agent_ingest_to_history_with_real_auth(
         assert body["completeness"]["status"] == "partial"
         assert "partial_scope" in body["completeness"]["reasons"]
         assert [(e["event_type"], e["resource"]["uid"]) for e in body["events"]] == [
-            ("update", "uid-new")
+            ("add", "uid-old"),
+            ("update", "uid-new"),
         ]
+        # Both identities stay readable: the first observation is kept, the replaced UID is
+        # marked gone with an uncertain (upper-bound) time.
+        lifecycle = {
+            item["subject"]["resource"]["uid"]: (item["lifecycle"], item["deleted_at_bound"])
+            for item in body["resources"]
+        }
+        assert lifecycle == {"uid-old": ("deleted", "gap_bounded"), "uid-new": ("present", None)}
         assert {item["evidence_key"] for item in body["evidence"]} == {
             f"{case.workspace}:{case.cluster}:h-1-{suffix}",
             f"{case.workspace}:{case.cluster}:h-2-{suffix}",
@@ -814,70 +893,3 @@ def test_public_http_agent_ingest_to_history_with_real_auth(
         restarted = app.get(f"/incidents/{correlation}/history").json()
     assert restarted["events"] == body["events"]
     assert len(restarted["evidence"]) == 2
-
-
-def load_real_sample(base_url: str = "http://127.0.0.1:18766") -> str:
-    """Send a synthetic incident through the public agent route; returns its correlation id.
-
-    Only the RCA report is written directly, because its producer (the incident worker) is
-    not part of this gateway process.  Everything else goes through real HTTP and auth.
-    """
-    import json
-    import urllib.request
-
-    os.environ["DATABASE_URL"] = DB_URL
-    from domains.registry import Database
-
-    case = real_case()
-    correlation = "real-incident-1"
-    now = datetime.now(UTC)
-
-    def post(key: str, minutes_ago: int, uid: str, events: list) -> None:
-        at = (now - timedelta(minutes=minutes_ago)).isoformat()
-        kubernetes = _kubernetes_payload(
-            at=now - timedelta(minutes=minutes_ago), uid=uid, events=events
-        )
-        body = {
-            "correlation_id": correlation,
-            "evidence_key": key,
-            "source_id": "synthetic-agent",
-            "window_start": at,
-            "kubernetes": kubernetes,
-        }
-        request = urllib.request.Request(
-            f"{base_url}/agent/evidence",
-            data=json.dumps(body).encode(),
-            headers={"content-type": "application/json", "x-agent-token": case.agent_token},
-        )
-        urllib.request.urlopen(request).read()  # noqa: S310 - fixed loopback URL
-
-    fact = {
-        "uid": "evt-real-1",
-        "api_version": "v1",
-        "namespace": "default",
-        "name": "api-0.crashloop",
-        "type": "Warning",
-        "count": 4,
-        "last_occurrence_at": (now - timedelta(minutes=6)).isoformat(),
-    }
-    post("sample-1", 12, "uid-api-old", [fact])
-    post("sample-2", 6, "uid-api-new", [fact])
-    Database().save_rca_report(
-        correlation,
-        case.workspace,
-        "synthetic_root_cause",
-        "none",
-        {
-            "incident": {
-                "incident_id": "inc-real-1",
-                "cluster_id": case.cluster,
-                "first_seen_at": (now - timedelta(minutes=5)).isoformat(),
-                "resource_kind": "Pod",
-                "resource_name": "api-0",
-                "namespace": "default",
-                "symptom": "CrashLoopBackOff",
-                "severity": "warning",
-            }
-        },
-    )
-    return correlation

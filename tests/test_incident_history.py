@@ -669,10 +669,11 @@ def test_adapter_never_stamps_a_missing_collection_time() -> None:
     assert evidence_inventory_payload("not-a-mapping") is None
 
 
-def test_adapter_skips_rows_without_a_uid_and_keeps_summaries_small() -> None:
+def test_adapter_keeps_named_rows_without_a_uid_and_never_invents_one() -> None:
     pods = [
-        {"uid": "", "name": "ghost", "namespace": "default", "phase": "Running"},
+        {"uid": "", "name": "blank-uid", "namespace": "default", "phase": "Running"},
         {"name": "no-uid", "namespace": "default"},
+        {"uid": "  ", "name": "spaces", "namespace": "default"},
         {
             "uid": "uid-2",
             "name": "api-1",
@@ -680,13 +681,77 @@ def test_adapter_skips_rows_without_a_uid_and_keeps_summaries_small() -> None:
             "phase": "Failed",
             "node_name": "n",
         },
+        {"uid": "uid-3", "namespace": "default"},
     ]
 
     payload = evidence_inventory_payload(_kubernetes(pods=pods))
 
     assert payload is not None
-    assert [item["uid"] for item in payload["resources"]] == ["uid-2"]
-    assert payload["resources"][0]["summary"] == {"phase": "Failed"}
+    by_name = {item["name"]: item for item in payload["resources"]}
+    assert set(by_name) == {"blank-uid", "no-uid", "spaces", "api-1"}
+    assert [by_name[name]["uid"] for name in ("blank-uid", "no-uid", "spaces")] == [None] * 3
+    assert by_name["api-1"]["uid"] == "uid-2"
+    assert by_name["api-1"]["summary"] == {"phase": "Failed"}
+
+
+def _pod_coverage(namespace: str = "default", **overrides: Any) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "collection": "pods",
+        "scope": "namespace",
+        "namespace": namespace,
+        "observed": True,
+        "complete": True,
+        "delete_safe": True,
+        "truncated": False,
+        "label_selector": None,
+        "reason_codes": [],
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_adapter_forwards_only_pod_namespace_proof() -> None:
+    other = {**_pod_coverage(), "collection": "workloads"}
+    cluster_scoped = {**_pod_coverage(), "scope": "cluster", "namespace": None}
+
+    payload = evidence_inventory_payload(
+        _kubernetes(collection_coverage=[_pod_coverage(), other, cluster_scoped, "junk"])
+    )
+
+    assert payload is not None
+    assert [entry["collection"] for entry in payload["summary"]["collection_coverage"]] == ["pods"]
+    assert payload["summary"]["scoped_coverage_authority"] is True
+    assert payload["summary"]["live_inventory"] is False
+
+
+def test_adapter_drops_all_proof_when_the_pod_list_was_limited() -> None:
+    limited = {"truncated": True, "lists": {"pods": {"truncated": True}}}
+
+    payload = evidence_inventory_payload(
+        _kubernetes(collection_coverage=[_pod_coverage()], collection_limits=limited)
+    )
+
+    assert payload is not None
+    assert "collection_coverage" not in payload["summary"]
+    assert "scoped_coverage_authority" not in payload["summary"]
+
+
+def test_adapter_without_producer_proof_grants_no_deletion_authority() -> None:
+    payload = evidence_inventory_payload(_kubernetes())
+
+    assert payload is not None
+    assert "collection_coverage" not in payload["summary"]
+    assert "scoped_coverage_authority" not in payload["summary"]
+
+
+def test_adapter_records_a_proven_empty_namespace() -> None:
+    payload = evidence_inventory_payload(
+        _kubernetes(pods=[], collection_coverage=[_pod_coverage()])
+    )
+
+    assert payload is not None
+    assert payload["resources"] == []
+    assert payload["summary"]["collection_coverage"][0]["complete"] is True
 
 
 def test_adapter_splits_event_capture_into_proof_and_facts() -> None:

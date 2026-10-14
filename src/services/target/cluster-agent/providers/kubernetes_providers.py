@@ -78,6 +78,17 @@ K8S_COLLECTION_STATUS_KEY = "collection_status"
 K8S_LIST_COLLECTION_STATUS_KEY = "kyro_collection_status"
 K8S_COLLECTION_RBAC_DENIED_REASON = "collection_rbac_denied"
 K8S_COLLECTION_STATUS_REASON_CODES = frozenset((K8S_COLLECTION_RBAC_DENIED_REASON,))
+# Marks a list response that was not a JSON object, so an empty fallback is never read as proof.
+K8S_LIST_MALFORMED_KEY = "kyro_list_malformed"
+# Namespace-scoped completeness proof; the gateway consumes it as inventory collection coverage.
+K8S_COLLECTION_COVERAGE_KEY = "collection_coverage"
+COVERAGE_REASON_QUERY_NOT_SUCCESSFUL = "query_not_successful"
+COVERAGE_REASON_MALFORMED_LIST = "malformed_list"
+COVERAGE_REASON_CONTINUATION = "continuation"
+COVERAGE_REASON_LABEL_SELECTOR = "label_selector"
+COVERAGE_REASON_IDENTITY_MISSING = "identity_missing"
+COVERAGE_REASON_NAMESPACE_MISMATCH = "namespace_mismatch"
+COVERAGE_REASON_PAYLOAD_LIMIT = "payload_limit"
 K8S_CRD_DISCOVERY_PATH = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions"
 
 MAX_KUBERNETES_PODS = 500
@@ -1044,7 +1055,9 @@ class KubernetesSnapshotProvider:
             return unavailable_collection_list(K8S_COLLECTION_RBAC_DENIED_REASON)
         response.raise_for_status()
         payload = response.json()
-        return payload if isinstance(payload, dict) else {"items": []}
+        if isinstance(payload, dict):
+            return payload
+        return {"items": [], K8S_LIST_MALFORMED_KEY: True}
 
     def empty_results(self) -> JsonObject:
         """Create an empty Kubernetes evidence bucket for this cluster."""
@@ -1230,6 +1243,16 @@ class KubernetesSnapshotProvider:
         )
         if collection_status:
             snapshot[K8S_COLLECTION_STATUS_KEY] = collection_status
+        # Only Pods are declared: Workload lists are filtered (active ReplicaSets) and carry
+        # no completeness claim, so no other collection gets an entry.
+        snapshot[K8S_COLLECTION_COVERAGE_KEY] = [
+            pod_collection_coverage(
+                pod_payload,
+                namespace=namespace,
+                label_selector=telemetry_query.label_selector,
+                query_status=status,
+            )
+        ]
         query_status: JsonObject = {
             "status": "partial" if collection_status and status == "success" else status,
             "namespace": namespace,
@@ -1528,6 +1551,10 @@ def merge_snapshot(target: JsonObject, source: JsonObject) -> None:
     target["cluster"] = {**dict(target.get("cluster", {})), **dict(source.get("cluster", {}))}
     target.setdefault("collection_scopes", [])
     target["collection_scopes"].extend(source.get("collection_scopes", []))
+    source_coverage = source.get(K8S_COLLECTION_COVERAGE_KEY)
+    if isinstance(source_coverage, list) and source_coverage:
+        target.setdefault(K8S_COLLECTION_COVERAGE_KEY, [])
+        target[K8S_COLLECTION_COVERAGE_KEY].extend(source_coverage)
     if "detected_provider" not in target and source.get("detected_provider"):
         target["detected_provider"] = source["detected_provider"]
     if isinstance(source.get(K8S_API_RESOURCE_DISCOVERY_KEY), dict):
@@ -1920,6 +1947,8 @@ def limit_kubernetes_snapshot(snapshot: JsonObject) -> JsonObject:
         group_keys={key: namespace_group_key for key in KUBERNETES_NAMESPACED_LIST_KEYS},
     )
     mark_dynamic_resource_payload_limit(snapshot, limits)
+    if K8S_RESOURCE_PODS in limits:
+        invalidate_pod_coverage(snapshot)
     attach_collection_limits(snapshot, limits)
     return snapshot
 
@@ -2004,6 +2033,86 @@ def collection_status_from_source(source: object) -> JsonObject:
 
 def collection_status_reason_codes(value: object) -> set[str]:
     return dynamic_reason_codes(value) & K8S_COLLECTION_STATUS_REASON_CODES
+
+
+def pod_collection_coverage(
+    pod_payload: object,
+    *,
+    namespace: str,
+    label_selector: str | None,
+    query_status: str,
+) -> JsonObject:
+    """Prove, or refuse to prove, that one namespace Pod list is the whole namespace.
+
+    Only an unfiltered, fully paged, well-formed list whose rows all belong to the
+    namespace and carry an identity may justify reading a missing Pod as deleted.  Every
+    other outcome stays observed-or-not but never complete, with the reason named.
+    """
+    reasons: set[str] = set()
+    observed = True
+    truncated = False
+    if query_status != "success":
+        observed = False
+        reasons.add(COVERAGE_REASON_QUERY_NOT_SUCCESSFUL)
+    rows = pod_payload.get("items") if isinstance(pod_payload, dict) else None
+    if (
+        not isinstance(pod_payload, dict)
+        or not isinstance(rows, list)
+        or pod_payload.get(K8S_LIST_MALFORMED_KEY) is True
+        or pod_payload.get("kind") not in (None, "PodList")
+        or any(not isinstance(row, dict) for row in rows)
+    ):
+        observed = False
+        reasons.add(COVERAGE_REASON_MALFORMED_LIST)
+    elif collection_status_from_source(pod_payload).get("observed") is False:
+        observed = False
+        reasons.update(
+            collection_status_reason_codes(
+                collection_status_from_source(pod_payload).get("reason_codes")
+            )
+        )
+    if isinstance(pod_payload, dict):
+        list_meta = object_or_empty(pod_payload.get("metadata"))
+        remaining = as_float(list_meta.get("remainingItemCount"))
+        if list_meta.get("continue") or (remaining is not None and remaining > 0):
+            truncated = True
+            reasons.add(COVERAGE_REASON_CONTINUATION)
+    if label_selector:
+        reasons.add(COVERAGE_REASON_LABEL_SELECTOR)
+    if observed and isinstance(rows, list):
+        for row in rows:
+            row_meta = metadata(row)
+            if not as_text(row_meta.get("name")) or not as_text(row_meta.get("uid")):
+                reasons.add(COVERAGE_REASON_IDENTITY_MISSING)
+            if as_text(row_meta.get("namespace")) != namespace:
+                reasons.add(COVERAGE_REASON_NAMESPACE_MISMATCH)
+    complete = observed and not truncated and not reasons
+    return {
+        "collection": K8S_RESOURCE_PODS,
+        "scope": "namespace",
+        "namespace": namespace,
+        "observed": observed,
+        "complete": complete,
+        "delete_safe": complete,
+        "truncated": truncated,
+        "label_selector": label_selector or None,
+        "reason_codes": sorted(reasons),
+    }
+
+
+def invalidate_pod_coverage(snapshot: JsonObject) -> None:
+    """A shared list or payload limit may have dropped any namespace's Pods: nothing is proven."""
+    entries = snapshot.get(K8S_COLLECTION_COVERAGE_KEY)
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("collection") == K8S_RESOURCE_PODS:
+            entry["complete"] = False
+            entry["delete_safe"] = False
+            entry["truncated"] = True
+            entry["reason_codes"] = sorted(
+                {*dynamic_reason_codes(entry.get("reason_codes")), COVERAGE_REASON_PAYLOAD_LIMIT}
+            )
 
 
 def namespace_group_key(item: object) -> str:
