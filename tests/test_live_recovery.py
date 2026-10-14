@@ -119,7 +119,19 @@ def test_image_recovery_rejects_incomplete_evidence(
 def test_live_cli_reuses_pr_and_requires_merge_and_fresh_rollout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, snapshot: dict
 ) -> None:
-    source = (Path(__file__).parents[1] / "deploy/oss/live-recovery.yaml").read_text()
+    source = yaml.safe_dump(
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "clue-live-recovery", "namespace": "clue-live-recovery"},
+            "spec": {
+                "replicas": 1,
+                "template": {
+                    "spec": {"containers": [{"name": "app", "image": "busybox:clue-missing-image"}]}
+                },
+            },
+        }
+    )
     files = {"deploy/oss/live-recovery.yaml": source}
     created: list[dict] = []
     pull: dict = {}
