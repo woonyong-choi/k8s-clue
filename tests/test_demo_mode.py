@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 
-def test_demo_rejects_unimplemented_live_pr_before_running_scenes() -> None:
+def test_demo_requires_explicit_live_command_before_running_scenes() -> None:
     # #2: 실행하지 않는 live PR을 검증한 것처럼 출력하면 안 된다.
     result = subprocess.run(
         ["bash", "-c", "uv() { echo contract-tests; }; export -f uv; bash scripts/oss-demo.sh"],
@@ -18,5 +18,5 @@ def test_demo_rejects_unimplemented_live_pr_before_running_scenes() -> None:
     )
 
     assert result.returncode == 1
-    assert "live Draft PR creation is not implemented" in result.stderr
+    assert "entrypoints.live_recovery propose --help" in result.stderr
     assert "contract-tests" not in result.stdout

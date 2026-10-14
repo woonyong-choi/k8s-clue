@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-# 실제 PR 생성 경로가 연결되기 전에는 토큰이나 클러스터에 접근하지 않는다.
+# 실제 PR은 대상과 상태 파일을 명시하는 별도 CLI에서만 생성한다.
 if [[ "${DEMO_SKIP_PR:-1}" != "1" ]]; then
-  echo "[demo][error] live Draft PR creation is not implemented; use DEMO_SKIP_PR=1 for contract tests" >&2
+  echo "[demo][error] use PYTHONPATH=src uv run python -m entrypoints.live_recovery propose --help for live Draft PR creation" >&2
   exit 1
 fi
 
