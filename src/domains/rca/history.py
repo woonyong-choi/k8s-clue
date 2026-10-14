@@ -160,6 +160,7 @@ def project_resources(
         if key is not None:
             grouped.setdefault(key, []).append(event)
 
+    replacements = _uid_replacements(events)
     resources: list[IncidentHistoryResource] = []
     for key in sorted(grouped):
         items = sorted(grouped[key], key=lambda item: (item.occurred_at, item.source_key))
@@ -179,6 +180,25 @@ def project_resources(
             )
             continue
         latest = inventory[-1]
+        replaced = replacements.get(key)
+        if (
+            replaced is not None
+            and latest.event_type != "delete"
+            and latest.occurred_at <= replaced.occurred_at
+        ):
+            # The same inventory key now carries another UID, so this identity is gone,
+            # but its deletion was never observed: the time is only an upper bound.
+            resources.append(
+                IncidentHistoryResource(
+                    subject=subject,
+                    lifecycle="deleted",
+                    first_observed_at=first,
+                    last_observed_at=last,
+                    deleted_at=_utc(replaced.occurred_at),
+                    deleted_at_bound="gap_bounded",
+                )
+            )
+            continue
         if latest.event_type == "delete":
             deleted_at = _utc(latest.occurred_at)
             resources.append(
@@ -238,6 +258,23 @@ def observation_from_snapshot_row(row: Mapping[str, object]) -> InventoryObserva
         resources_complete=complete,
         event_capture_complete=capture_complete,
     )
+
+
+def _uid_replacements(events: Sequence[TimelineEvent]) -> dict[ResourceKey, TimelineEvent]:
+    """Map an identity to the first later inventory event that shows another UID for its key."""
+    by_native: dict[str, list[TimelineEvent]] = {}
+    for event in events:
+        if event.source == "inventory" and isinstance(event.subject, TimelineResourceSubject):
+            by_native.setdefault(event.native_id, []).append(event)
+    replacements: dict[ResourceKey, TimelineEvent] = {}
+    for items in by_native.values():
+        ordered = sorted(items, key=lambda item: (item.occurred_at, item.source_key))
+        for earlier, later in zip(ordered, ordered[1:], strict=False):
+            old = _resource_key(earlier)
+            new = _resource_key(later)
+            if old != new and old is not None and old not in replacements:
+                replacements[old] = later
+    return replacements
 
 
 def _resource_key(event: TimelineEvent) -> ResourceKey | None:

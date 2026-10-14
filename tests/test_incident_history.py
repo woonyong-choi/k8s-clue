@@ -128,6 +128,21 @@ def test_same_name_with_different_uid_is_a_separate_resource() -> None:
     assert by_uid["uid-new"].deleted_at is None
 
 
+def test_uid_replaced_under_the_same_inventory_key_is_not_left_present() -> None:
+    # A recreated Pod keeps its inventory key, so the ledger holds add(old) then update(new).
+    events = [_event("add", 1, uid="uid-old"), _event("update", 6, uid="uid-new")]
+
+    resources = {
+        item.subject.resource.uid: item  # type: ignore[union-attr]
+        for item in project_resources(events, coverage=())
+    }
+
+    assert resources["uid-old"].lifecycle == "deleted"
+    assert resources["uid-old"].deleted_at == _at(6)
+    assert resources["uid-old"].deleted_at_bound == "gap_bounded"
+    assert resources["uid-new"].lifecycle == "present"
+
+
 def test_uid_less_inventory_stays_a_locator_and_is_not_promoted() -> None:
     resources = project_resources([_event("add", 1, uid=None)], coverage=())
 
