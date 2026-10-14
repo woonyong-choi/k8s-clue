@@ -132,13 +132,23 @@ class EventHandlerSpec:
     handler_factory: Callable[[EventClient, Database], EventHandler]
     durable_name: str | None = None
     retry_policy: EventRetryPolicy = EventRetryPolicy()
+    # 병합 전 워커의 consumer identity 보존용 (subject, consumer) 쌍.
+    # durable 이름과 ledger·DLQ consumer 를 subject 별로 기존 값 그대로 유지한다.
+    consumers: tuple[tuple[str, str], ...] = ()
 
     @property
     def durable(self) -> str:
         return durable_name(self.service_name, self.durable_name)
 
+    def consumer_for(self, subject: str) -> str:
+        """ledger·DLQ 에 기록되는 consumer 이름. 지정이 없으면 서비스 이름."""
+        return dict(self.consumers).get(subject, self.service_name)
+
     def durable_for(self, subject: str) -> str:
         """subject 여러 개면 컨슈머 이름 충돌 방지 위해 subject 로 namespace."""
+        pinned = dict(self.consumers).get(subject)
+        if pinned is not None:
+            return durable_name(pinned, self.durable_name)
         if len(self.subjects) <= 1:
             return self.durable
         slug = subject.replace(".", "-").replace(">", "all").replace("*", "any")
@@ -216,21 +226,33 @@ class DeadLetterPort(Protocol):
 class EventProcessor:
     def __init__(
         self,
-        service_name: str,
+        spec: EventHandlerSpec,
         handler: EventHandler,
         store: EventProcessingStore,
         dead_letters: DeadLetterPort,
-        retry_policy: EventRetryPolicy,
         codec: Codec | None = None,
         ledger: Ledger | None = None,
     ) -> None:
-        self.service_name = service_name
+        self.service_name = spec.service_name
+        self.retry_policy = spec.retry_policy
+        self.consumers = dict(spec.consumers)
+        self.ledgers: dict[str, Ledger] = {}
         self.handler = handler
         self.store = store
         self.dead_letters = dead_letters
-        self.retry_policy = retry_policy
         self.codec = codec if codec is not None else JsonCodec()
-        self.ledger = ledger if ledger is not None else Ledger(store, service_name)
+        self.ledger = ledger if ledger is not None else Ledger(store, self.service_name)
+
+    def consumer_for(self, evt: EventEnvelope) -> str:
+        return self.consumers.get(evt.subject, self.service_name)
+
+    def ledger_for(self, evt: EventEnvelope) -> Ledger:
+        consumer = self.consumer_for(evt)
+        if consumer == self.service_name:
+            return self.ledger
+        if consumer not in self.ledgers:
+            self.ledgers[consumer] = Ledger(self.store, consumer)
+        return self.ledgers[consumer]
 
     async def process(self, message: EventMessage) -> None:
         try:
@@ -258,8 +280,10 @@ class EventProcessor:
             return
         # 1) claim 을 별도 트랜잭션으로 먼저 커밋. attempt 증가가 핸들러 실패에 롤백되면
         #    재시도 횟수 미누적으로 영구 DLQ 미도달 위험 → claim 과 업무 분리
+        consumer = self.consumer_for(evt)
+        ledger = self.ledger_for(evt)
         with self.store.unit_of_work():
-            processing = self.ledger.begin(evt)  # 처리대장에 "처리 시작" 기록 + attempt 증가
+            processing = ledger.begin(evt)  # 처리대장에 "처리 시작" 기록 + attempt 증가
         if processing.status in TERMINAL_STATUSES:
             await message.ack()  # 이미 처리됨/소진됨(중복) → 건너뛰기(정확히 한 번 핵심)
             return
@@ -273,7 +297,7 @@ class EventProcessor:
         # 2) 업무쓰기 + outbox 적재 + ledger 완료를 한 트랜잭션으로(원자성).
         try:
             with self.store.unit_of_work() as conn:
-                context = {**event_context(evt), "consumer": self.service_name}
+                context = {**event_context(evt), "consumer": consumer}
                 LOGGER.info("handling", extra={"context": context})
                 with event_causation(evt.event_id):  # 자식 이벤트들의 부모 = 이 이벤트
                     # 핸들러 hang 상한: 초과 시 TimeoutError → 아래 except → fail()(재시도/DLQ).
@@ -282,7 +306,7 @@ class EventProcessor:
                         self.handler(evt), timeout=self.retry_policy.handler_timeout_seconds
                     )  # 핸들러 실행 → 다음 이벤트 봉투들 수집
                 self.store.stage_events(conn, outbox_events)  # 다음 이벤트들을 outbox 에 적재
-                self.ledger.finish(evt, elapsed_ms(started_at))  # 처리대장에 "완료" 기록
+                ledger.finish(evt, elapsed_ms(started_at))  # 처리대장에 "완료" 기록
             # with 끝 = 트랜잭션 커밋(업무 + outbox 함께 저장)
         except Exception as exc:
             # claim 이 이미 커밋되어 attempt 가 누적된 상태 → fail 이 그 row 를 갱신(재시도/DLQ).
@@ -301,18 +325,20 @@ class EventProcessor:
         attempts: int,
         duration_ms: int | None = None,
     ) -> None:
-        context = {**event_context(evt), "consumer": self.service_name, "attempts": attempts}
+        consumer = self.consumer_for(evt)
+        ledger = self.ledger_for(evt)
+        context = {**event_context(evt), "consumer": consumer, "attempts": attempts}
         if attempts >= self.retry_policy.max_attempts:
             # DLQ 기록을 먼저, ledger DEAD_LETTERED 표시를 나중에 함. 둘이 한 트랜잭션이 아니라
             # 사이에 크래시할 수 있는데, 이 순서면 '유실'이 아니라 '재처리(최악 중복 DLQ)'가 됨
             # — DLQ 행은 남고 상태는 아직 안 닫혀 재배달 시 다시 처리/DLQ(복구 가능).
             try:
                 await asyncio.wait_for(
-                    self.dead_letters.capture(evt, self.service_name, error, attempts),
+                    self.dead_letters.capture(evt, consumer, error, attempts),
                     timeout=self.retry_policy.dead_letter_timeout_seconds,
                 )
             except Exception as capture_error:
-                self.ledger.retry(evt, error, duration_ms)
+                ledger.retry(evt, error, duration_ms)
                 LOGGER.error(
                     "dead_letter_capture_failed",
                     extra={"context": context},
@@ -320,12 +346,12 @@ class EventProcessor:
                 )
                 await message.nak(delay=self.retry_policy.retry_delay_seconds)
                 return
-            self.ledger.dead_letter(evt, error, duration_ms)
+            ledger.dead_letter(evt, error, duration_ms)
             LOGGER.error("dead_letter", extra={"context": context}, exc_info=error)
             await message.ack()
             return
 
-        self.ledger.retry(evt, error, duration_ms)
+        ledger.retry(evt, error, duration_ms)
         LOGGER.warning("retry", extra={"context": context}, exc_info=error)
         await message.nak(delay=self.retry_policy.retry_delay_seconds)
 
@@ -410,11 +436,10 @@ class WorkerRuntime:
         events = RecordedEventClient(self.bus, self.db)
         handler = self.spec.handler_factory(events, self.db)
         processor = EventProcessor(
-            self.spec.service_name,
+            self.spec,
             handler,
             self.db,
             DeadLetterSink(events, self.db, self.spec.service_name),
-            self.spec.retry_policy,
         )
         relay = OutboxRelay(self.db, self.bus, self.spec.service_name)
         stopping = asyncio.Event()

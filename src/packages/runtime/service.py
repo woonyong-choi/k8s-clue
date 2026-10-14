@@ -76,6 +76,7 @@ class WorkerService:
     handler_factory: WorkerHandlerFactory
     durable_name: str | None = None
     bus: EventConsumerBus | None = None
+    consumers: tuple[tuple[str, str], ...] = ()
 
     def run(self) -> None:
         AsyncService(self.service_name, self.serve).run()
@@ -86,5 +87,6 @@ class WorkerService:
             subjects=self.subjects,
             handler_factory=self.handler_factory,
             durable_name=self.durable_name,
+            consumers=self.consumers,
         )
         await WorkerRuntime(spec, bus=self.bus).run()

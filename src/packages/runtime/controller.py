@@ -32,20 +32,16 @@ EVENT_BUS_MODES = frozenset({"inprocess", "nats"})
 AGENT_SERVICE_NAMES = frozenset({"cluster-agent"})
 CORE_CONTROLLER_SERVICE_NAMES = frozenset(
     {
-        "analyze-worker",
         "api-gateway",
         "ai-diff-worker",
-        "dispatch-worker",
         "evidence-worker",
         "incident-worker",
         "outbox-relay",
-        "plan-worker",
         "rca-feedback-worker",
         "rca-worker",
         "recovery-worker",
         "safe-pr-worker",
         "scm-worker",
-        "select-worker",
         "dead-letter-monitor",
     }
 )

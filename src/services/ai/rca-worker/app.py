@@ -1,24 +1,63 @@
-"""rca-worker — rca.candidates.evaluated -> rca.completed."""
+"""rca-worker — evidence.bundle.built -> rca.candidates.planned -> rca.candidates.evaluated -> rca.completed."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
 from domains.rca.events import (
+    EvidenceBundleBuiltBody,
     RcaAnalysisBlockedBody,
     RcaCandidatesEvaluatedBody,
+    RcaCandidatesPlannedBody,
     RcaCompletedBody,
 )
 from packages.contracts.event_bus.bodies import EventBody
-from packages.contracts.stores import RcaStore
+from packages.contracts.stores import RcaBacklogStore, RcaStore
 from packages.runtime.app import App, EventContext
-from services.ai.agent.pipeline import RcaCompletionPipeline
+from services.ai.agent.pipeline import (
+    CauseEvaluationPipeline,
+    CausePlanningPipeline,
+    RcaCompletionPipeline,
+)
 
 app = App("rca-worker")
+planning_pipeline = CausePlanningPipeline()
+evaluation_pipeline = CauseEvaluationPipeline()
 pipeline = RcaCompletionPipeline()
+BACKLOG_RULE_RESOLVED_REASON = "matching RCA rule is now available"
 
 
-@app.on(RcaCandidatesEvaluatedBody)
+@app.on(EvidenceBundleBuiltBody, consumer="plan-worker")
+async def on_evidence_bundle_built(
+    evt: EvidenceBundleBuiltBody,
+    ctx: EventContext[RcaBacklogStore],
+) -> AsyncIterator[EventBody]:
+    bodies = planning_pipeline.plan_bodies(evt)
+    planned = next((body for body in bodies if isinstance(body, RcaCandidatesPlannedBody)), None)
+    if (
+        planned is not None
+        and planned.rule_missing is None
+        and evt.incident is not None
+        and ctx.db is not None
+    ):
+        # 증상에 맞는 RCA rule 이 생기면 과거 missing-rule backlog 를 자동 해소한다.
+        await ctx.db.resolve_rca_backlog_item_for_rule(
+            evt.evidence.workspace_id,
+            evt.incident.symptom,
+            BACKLOG_RULE_RESOLVED_REASON,
+        )
+    for body in bodies:
+        yield body
+
+
+@app.on(RcaCandidatesPlannedBody, consumer="analyze-worker")
+async def on_candidates_planned(
+    evt: RcaCandidatesPlannedBody,
+) -> AsyncIterator[EventBody]:
+    yield evaluation_pipeline.evaluate_body(evt)
+
+
+@app.on(RcaCandidatesEvaluatedBody, consumer="rca-worker")
 async def on_candidates_evaluated(
     evt: RcaCandidatesEvaluatedBody,
     ctx: EventContext[RcaStore],
@@ -53,5 +92,7 @@ async def on_candidates_evaluated(
             report_body,
         )
     yield result
+
+
 if __name__ == "__main__":
     app.run()
