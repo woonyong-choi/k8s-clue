@@ -304,3 +304,58 @@ def test_get_json_marks_a_non_object_body(module: Any) -> None:
     result = asyncio.run(fetch())
 
     assert result["items"] == [] and result["kyro_list_malformed"] is True
+
+
+MALFORMED_LISTS = {
+    "metadata_string": {"metadata": "invalid"},
+    "metadata_list": {"metadata": []},
+    "remaining_string": {"metadata": {"remainingItemCount": "invalid"}},
+    "remaining_bool": {"metadata": {"remainingItemCount": True}},
+    "continue_int": {"metadata": {"continue": 7}},
+    "status_not_object": {"kyro_collection_status": "bad"},
+    "status_observed_string": {"kyro_collection_status": {"observed": "yes", "reason_codes": []}},
+    "status_reasons_int": {"kyro_collection_status": {"observed": True, "reason_codes": 7}},
+    "status_reasons_non_string": {
+        "kyro_collection_status": {"observed": True, "reason_codes": [7]}
+    },
+    "observed_with_rbac_reason": {
+        "kyro_collection_status": {"observed": True, "reason_codes": ["collection_rbac_denied"]}
+    },
+    "unobserved_without_reason": {"kyro_collection_status": {"observed": False}},
+}
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED_LISTS))
+def test_a_malformed_list_field_is_never_proof(module: Any, name: str) -> None:
+    listing = pod_list(pod("api-0", uid="u1"), **MALFORMED_LISTS[name])
+
+    snapshot = collect(module, {"default": listing})
+
+    entry = entries(snapshot)["default"]
+    assert_not_delete_proof(entry)
+    assert entry["reason_codes"]
+    assert [item["uid"] for item in snapshot["pods"]] == ["u1"]  # the observation is kept
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": "p", "namespace": "default", "uid": 7},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": 7, "namespace": "default", "uid": "u"},
+        },
+        {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "p", "namespace": 7, "uid": "u"}},
+        {"apiVersion": "v1", "kind": "Pod", "metadata": "invalid"},
+        {"apiVersion": "v1", "kind": "Pod"},
+    ],
+)
+def test_a_row_with_wrongly_typed_identity_is_never_proof(module: Any, row: dict) -> None:
+    snapshot = collect(module, {"default": pod_list(row)})
+
+    assert_not_delete_proof(entries(snapshot)["default"])

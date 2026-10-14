@@ -131,12 +131,6 @@ def inventory_delete_scope_predicate(table: Any, scopes: Sequence[InventoryDelet
     return or_(*clauses) if clauses else false()
 
 
-def _reason_codes(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        return ()
-    return tuple(reason.strip() for reason in value if isinstance(reason, str) and reason.strip())
-
-
 def _delete_authoritative_entry(entry: Mapping[str, Any]) -> bool:
     return (
         entry.get("complete") is True
@@ -144,8 +138,13 @@ def _delete_authoritative_entry(entry: Mapping[str, Any]) -> bool:
         and entry.get("observed") is True
         and entry.get("truncated") is not True
         and not _text(entry.get("label_selector"))
-        and not _reason_codes(entry.get("reason_codes"))
+        and _no_reasons(entry.get("reason_codes"))
     )
+
+
+def _no_reasons(value: Any) -> bool:
+    """Only an actual empty list of strings means no reason; a wrong type is not absence."""
+    return isinstance(value, Sequence) and not isinstance(value, str | bytes) and len(value) == 0
 
 
 def _text(value: Any) -> str:

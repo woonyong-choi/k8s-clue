@@ -248,3 +248,89 @@ def test_uid_less_pods_stay_locators_and_are_never_promoted(harness: Harness) ->
     assert all(event["resource"] is None for event in body["events"])
     assert [item["subject"]["kind"] for item in body["resources"]] == ["inventory_locator"]
     assert body["resources"][0]["subject"]["name"] == "ghost"
+
+
+def _corrupt(path: str, value: Any) -> Callable[[dict], None]:
+    def apply(kubernetes: dict) -> None:
+        entry = kubernetes["collection_coverage"][0]
+        if path == "__whole__":
+            kubernetes["collection_coverage"] = value
+        else:
+            entry[path] = value
+
+    return apply
+
+
+CORRUPT_PROOFS: dict[str, Callable[[dict], None]] = {
+    "reasons_int": _corrupt("reason_codes", 7),
+    "reasons_true": _corrupt("reason_codes", True),
+    "reasons_non_string": _corrupt("reason_codes", [7]),
+    "reasons_string": _corrupt("reason_codes", "collection_rbac_denied"),
+    "observed_string": _corrupt("observed", "yes"),
+    "complete_string": _corrupt("complete", "true"),
+    "delete_safe_int": _corrupt("delete_safe", 1),
+    "truncated_string": _corrupt("truncated", "false"),
+    "selector_int": _corrupt("label_selector", 7),
+    "whole_string": _corrupt("__whole__", "junk"),
+    "whole_number": _corrupt("__whole__", 7),
+    "whole_junk_list": _corrupt("__whole__", [None, 7, "x"]),
+}
+
+
+def _assert_observed_but_nothing_deleted(harness: Harness, status: int) -> None:
+    assert status == 200  # malformed proof never becomes an unhandled 500
+    events = harness.events()
+    assert not [event for event in events if event[0] == "delete"]
+    assert ("update", "ua2") in events  # the cut itself was still observed and stored
+    assert harness.lifecycle()["ub"] == ("present", None)
+
+
+@pytest.mark.parametrize("name", sorted(CORRUPT_PROOFS))
+def test_a_corrupted_proof_is_stored_as_an_observation_and_deletes_nothing(
+    harness: Harness, name: str
+) -> None:
+    harness.collect(20, {"default": pod_list(pod("a", uid="ua"), pod("b", uid="ub"))})
+
+    status = harness.collect(
+        10, {"default": pod_list(pod("a", uid="ua2"))}, transform=CORRUPT_PROOFS[name]
+    )
+
+    _assert_observed_but_nothing_deleted(harness, status)
+
+
+MALFORMED_COLLECTOR_LISTS: dict[str, dict[str, Any]] = {
+    "metadata_string": {"metadata": "invalid"},
+    "remaining_string": {"metadata": {"remainingItemCount": "invalid"}},
+    "observed_with_rbac_reason": {
+        "kyro_collection_status": {"observed": True, "reason_codes": ["collection_rbac_denied"]}
+    },
+    "status_reasons_int": {"kyro_collection_status": {"observed": True, "reason_codes": 7}},
+}
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED_COLLECTOR_LISTS))
+def test_a_malformed_collector_list_deletes_nothing_through_the_ingress(
+    harness: Harness, name: str
+) -> None:
+    harness.collect(20, {"default": pod_list(pod("a", uid="ua"), pod("b", uid="ub"))})
+
+    status = harness.collect(
+        10, {"default": pod_list(pod("a", uid="ua2"), **MALFORMED_COLLECTOR_LISTS[name])}
+    )
+
+    _assert_observed_but_nothing_deleted(harness, status)
+
+
+@pytest.mark.parametrize("junk", ["x", 7, {"lists": 7}, [], True])
+def test_junk_collection_limits_at_the_ingress_never_return_500(
+    harness: Harness, junk: Any
+) -> None:
+    harness.collect(20, {"default": pod_list(pod("a", uid="ua"), pod("b", uid="ub"))})
+
+    def set_limits(kubernetes: dict) -> None:
+        kubernetes["collection_limits"] = junk
+
+    status = harness.collect(10, {"default": pod_list(pod("a", uid="ua2"))}, transform=set_limits)
+
+    assert status == 200
+    assert not [event for event in harness.events() if event[0] == "delete"]

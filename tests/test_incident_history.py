@@ -770,3 +770,70 @@ def test_adapter_splits_event_capture_into_proof_and_facts() -> None:
     summary = payload["summary"]
     assert "events" not in summary["kubernetes_event_capture"]
     assert summary["kubernetes_event_facts"] == [{"uid": "evt-1", "name": "e", "count": 1}]
+
+
+# --- 잘못된 증명은 삭제 권한을 주지 않고 오류도 내지 않는다 ---------------------------------
+
+MALFORMED_PROOFS = {
+    "reasons_int": {"reason_codes": 7},
+    "reasons_true": {"reason_codes": True},
+    "reasons_non_string": {"reason_codes": [7]},
+    "reasons_string": {"reason_codes": "collection_rbac_denied"},
+    "reasons_missing": {"reason_codes": None},
+    "observed_string": {"observed": "yes"},
+    "observed_int": {"observed": 1},
+    "complete_string": {"complete": "true"},
+    "delete_safe_int": {"delete_safe": 1},
+    "truncated_string": {"truncated": "false"},
+    "truncated_missing": {"truncated": None},
+    "selector_int": {"label_selector": 7},
+    "complete_with_reason": {"reason_codes": ["collection_rbac_denied"]},
+    "complete_with_selector": {"label_selector": "app=a"},
+    "complete_but_truncated": {"truncated": True},
+    "complete_but_unobserved": {"observed": False},
+}
+
+
+@pytest.mark.parametrize("name", sorted(MALFORMED_PROOFS))
+def test_malformed_proof_keeps_the_observation_and_grants_no_deletion(name: str) -> None:
+    entry = _pod_coverage(**MALFORMED_PROOFS[name])
+
+    payload = evidence_inventory_payload(_kubernetes(collection_coverage=[entry]))
+
+    assert payload is not None
+    assert [item["name"] for item in payload["resources"]] == ["api-0"]
+    forwarded = payload["summary"]["collection_coverage"]
+    assert len(forwarded) == 1
+    assert forwarded[0]["complete"] is False and forwarded[0]["delete_safe"] is False
+    assert forwarded[0]["reason_codes"]
+
+
+@pytest.mark.parametrize("junk", ["text", 7, {"a": 1}, True, [None, 7, "x"]])
+def test_a_non_list_or_junk_coverage_value_is_ignored_without_error(junk: Any) -> None:
+    payload = evidence_inventory_payload(_kubernetes(collection_coverage=junk))
+
+    assert payload is not None
+    assert not payload["summary"].get("collection_coverage")
+    assert "scoped_coverage_authority" not in payload["summary"]
+
+
+@pytest.mark.parametrize("limits", ["x", 7, {"lists": 7}, {"lists": []}, [], True])
+def test_junk_collection_limits_drop_every_proof_without_error(limits: Any) -> None:
+    payload = evidence_inventory_payload(
+        _kubernetes(collection_coverage=[_pod_coverage()], collection_limits=limits)
+    )
+
+    assert payload is not None
+    assert "collection_coverage" not in payload["summary"]
+    assert "scoped_coverage_authority" not in payload["summary"]
+
+
+def test_well_formed_limits_that_name_other_lists_keep_the_pod_proof() -> None:
+    limits = {"truncated": True, "lists": {"events": {"truncated": True}}}
+
+    payload = evidence_inventory_payload(
+        _kubernetes(collection_coverage=[_pod_coverage()], collection_limits=limits)
+    )
+
+    assert payload is not None
+    assert payload["summary"]["collection_coverage"][0]["complete"] is True

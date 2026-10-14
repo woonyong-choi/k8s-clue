@@ -2046,7 +2046,7 @@ def pod_collection_coverage(
 
     Only an unfiltered, fully paged, well-formed list whose rows all belong to the
     namespace and carry an identity may justify reading a missing Pod as deleted.  Every
-    other outcome stays observed-or-not but never complete, with the reason named.
+    field is type-checked: a value of the wrong type is a malformed list, never "absent".
     """
     reasons: set[str] = set()
     observed = True
@@ -2054,38 +2054,32 @@ def pod_collection_coverage(
     if query_status != "success":
         observed = False
         reasons.add(COVERAGE_REASON_QUERY_NOT_SUCCESSFUL)
-    rows = pod_payload.get("items") if isinstance(pod_payload, dict) else None
-    if (
-        not isinstance(pod_payload, dict)
-        or not isinstance(rows, list)
-        or pod_payload.get(K8S_LIST_MALFORMED_KEY) is True
-        or pod_payload.get("kind") not in (None, "PodList")
-        or any(not isinstance(row, dict) for row in rows)
-    ):
+    if not _well_formed_pod_list(pod_payload):
         observed = False
         reasons.add(COVERAGE_REASON_MALFORMED_LIST)
-    elif collection_status_from_source(pod_payload).get("observed") is False:
-        observed = False
-        reasons.update(
-            collection_status_reason_codes(
-                collection_status_from_source(pod_payload).get("reason_codes")
-            )
-        )
-    if isinstance(pod_payload, dict):
-        list_meta = object_or_empty(pod_payload.get("metadata"))
-        remaining = as_float(list_meta.get("remainingItemCount"))
-        if list_meta.get("continue") or (remaining is not None and remaining > 0):
+    else:
+        status_reasons = _list_status_reasons(pod_payload)
+        if status_reasons is None:
+            observed = False
+            reasons.add(COVERAGE_REASON_MALFORMED_LIST)
+        else:
+            reasons.update(status_reasons)
+            collector_status = pod_payload.get(K8S_LIST_COLLECTION_STATUS_KEY)
+            if isinstance(collector_status, dict) and collector_status["observed"] is False:
+                observed = False
+        if _list_is_continued(pod_payload):
             truncated = True
             reasons.add(COVERAGE_REASON_CONTINUATION)
+        for row in pod_payload["items"]:
+            row_meta = row.get("metadata")
+            name = row_meta.get("name") if isinstance(row_meta, dict) else None
+            uid = row_meta.get("uid") if isinstance(row_meta, dict) else None
+            if not (isinstance(name, str) and name and isinstance(uid, str) and uid):
+                reasons.add(COVERAGE_REASON_IDENTITY_MISSING)
+            if not isinstance(row_meta, dict) or row_meta.get("namespace") != namespace:
+                reasons.add(COVERAGE_REASON_NAMESPACE_MISMATCH)
     if label_selector:
         reasons.add(COVERAGE_REASON_LABEL_SELECTOR)
-    if observed and isinstance(rows, list):
-        for row in rows:
-            row_meta = metadata(row)
-            if not as_text(row_meta.get("name")) or not as_text(row_meta.get("uid")):
-                reasons.add(COVERAGE_REASON_IDENTITY_MISSING)
-            if as_text(row_meta.get("namespace")) != namespace:
-                reasons.add(COVERAGE_REASON_NAMESPACE_MISMATCH)
     complete = observed and not truncated and not reasons
     return {
         "collection": K8S_RESOURCE_PODS,
@@ -2098,6 +2092,49 @@ def pod_collection_coverage(
         "label_selector": label_selector or None,
         "reason_codes": sorted(reasons),
     }
+
+
+def _well_formed_pod_list(pod_payload: object) -> bool:
+    if not isinstance(pod_payload, dict) or pod_payload.get(K8S_LIST_MALFORMED_KEY) is True:
+        return False
+    rows = pod_payload.get("items")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return False
+    if pod_payload.get("kind") not in (None, "PodList"):
+        return False
+    list_meta = pod_payload.get("metadata")
+    if list_meta is not None and not isinstance(list_meta, dict):
+        return False
+    if list_meta is None:
+        return True
+    next_token = list_meta.get("continue")
+    if next_token is not None and not isinstance(next_token, str):
+        return False
+    remaining = list_meta.get("remainingItemCount")
+    return remaining is None or (isinstance(remaining, int | float) and not isinstance(remaining, bool))
+
+
+def _list_is_continued(pod_payload: dict[str, Any]) -> bool:
+    list_meta = pod_payload.get("metadata") or {}
+    remaining = list_meta.get("remainingItemCount")
+    return bool(list_meta.get("continue")) or (remaining is not None and remaining > 0)
+
+
+def _list_status_reasons(pod_payload: dict[str, Any]) -> list[str] | None:
+    """Reason codes the collector attached, or ``None`` when its status is malformed."""
+    if K8S_LIST_COLLECTION_STATUS_KEY not in pod_payload:
+        return []
+    status = pod_payload[K8S_LIST_COLLECTION_STATUS_KEY]
+    if not isinstance(status, dict) or not isinstance(status.get("observed"), bool):
+        return None
+    codes = status.get("reason_codes", [])
+    if not isinstance(codes, list) or any(not isinstance(code, str) for code in codes):
+        return None
+    reasons = sorted(set(codes))
+    # An observed list that still names a reason (for example RBAC denied) is not whole.
+    if status["observed"] is False and not reasons:
+        reasons.append(COVERAGE_REASON_QUERY_NOT_SUCCESSFUL)
+    return reasons
 
 
 def invalidate_pod_coverage(snapshot: JsonObject) -> None:
