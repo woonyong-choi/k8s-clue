@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,13 +24,16 @@ BASE = datetime(2026, 10, 15, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture(scope="module")
-def db() -> Any:
+def db() -> Iterator[Any]:
     os.environ["DATABASE_URL"] = DB_URL
     from domains.registry import Database
 
     database = Database()
     database.init()
-    return database
+    try:
+        yield database
+    finally:
+        database.dispose()  # close pooled connections instead of leaving them to the collector
 
 
 @pytest.fixture
@@ -893,3 +897,56 @@ def test_public_http_agent_ingest_to_history_with_real_auth(
         restarted = app.get(f"/incidents/{correlation}/history").json()
     assert restarted["events"] == body["events"]
     assert len(restarted["evidence"]) == 2
+
+
+@pytest.mark.skipif(not REDIS_URL, reason="INCIDENT_HISTORY_TEST_REDIS_URL 미설정")
+def test_login_history_and_logout_keep_the_session_key_value_and_ttl(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import sys
+    from pathlib import Path
+
+    import redis
+    from fastapi.testclient import TestClient
+
+    from packages.events.in_memory import InMemoryEventBus
+
+    sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src/services/gateway/api-gateway")]
+    monkeypatch.setenv("REDIS_URL", REDIS_URL)
+    gateway = __import__("gateway")
+    settings = __import__("settings").Settings
+    suffix = uuid.uuid4().hex[:8]
+    case = seed_real_gateway(db, real_case(suffix))
+    correlation = f"session-{suffix}"
+    db.save_rca_report(
+        correlation,
+        case.workspace,
+        "synthetic",
+        "none",
+        {
+            "incident": {
+                "incident_id": f"inc-{suffix}",
+                "cluster_id": case.cluster,
+                "first_seen_at": datetime.now(UTC).isoformat(),
+                "symptom": "synthetic",
+                "severity": "warning",
+            }
+        },
+    )
+    ttl = gateway.ApiGateway._session_store_config().ttl_seconds
+    store = redis.Redis.from_url(REDIS_URL)
+    with TestClient(gateway.create_app(event_bus=InMemoryEventBus()), base_url="https://t") as app:
+        login = app.post("/auth/login", json={"email": case.viewer[1], "password": REAL_PASSWORD})
+        assert login.status_code == 200
+        key = f"{settings.SESSION_KEY_PREFIX}:{app.cookies.get('service_session')}"
+        stored = json.loads(store.get(key))
+        assert stored["user_id"] == case.viewer[0]
+        assert stored["workspace_id"] == case.workspace
+        assert stored["email"] == case.viewer[1] and stored["auth_mode"] == "password"
+        assert ttl - 10 <= store.ttl(key) <= ttl  # the expiry set with the value is preserved
+        assert app.get(f"/incidents/{correlation}/history").status_code == 200
+        intent = {settings.CSRF_INTENT_HEADER: settings.CSRF_INTENT_VALUE}
+        assert app.post("/auth/logout", headers=intent).status_code == 200
+        assert store.exists(key) == 0
+        assert app.get(f"/incidents/{correlation}/history").status_code == 401
