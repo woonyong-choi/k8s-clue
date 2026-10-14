@@ -7,11 +7,12 @@ and no observation gap, partial cut, truncation or unauthorized source exists.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from domains.inventory.kubernetes_events import EVENT_CAPTURE_REASON_COMPLETE
 from domains.inventory.snapshot_evidence import COMPLETE_CUT_PROOF_KEY
 from packages.contracts.parity import ClusterScope
 from packages.contracts.timeline import (
@@ -39,6 +40,14 @@ class InventoryObservation:
 
     collected_at_ms: int
     resources_complete: bool
+    event_capture_complete: bool = False
+
+
+def effective_window(window: TimelineWindow, now_ms: int) -> TimelineWindow:
+    """Never claim the future: clamp the end to now when the window has begun."""
+    if window.to_ms > now_ms > window.from_ms:
+        return TimelineWindow(from_ms=window.from_ms, to_ms=now_ms)
+    return window
 
 
 def assess_completeness(
@@ -51,8 +60,15 @@ def assess_completeness(
     truncated: bool,
     source_unavailable: bool,
     inventory_authorized: bool,
+    events_authorized: bool = True,
+    has_events: bool = False,
 ) -> IncidentHistoryCompleteness:
-    """Decide ``complete`` / ``partial`` / ``unavailable`` without inferring recovery."""
+    """Decide ``complete`` / ``partial`` / ``unavailable`` without inferring recovery.
+
+    Each authorized source needs its own proof.  Inventory cuts never vouch for
+    Kubernetes Events, and ledger rows already read are kept even when no
+    inventory observation exists.
+    """
     workspace_id, cluster_id = scope_cluster
     from_ms = window.from_ms
     to_ms = min(window.to_ms, now_ms)
@@ -75,6 +91,21 @@ def assess_completeness(
     in_range = [
         item for item in ordered if from_ms - OBSERVATION_MAX_GAP_MS <= item.collected_at_ms < to_ms
     ]
+    if has_events and (not in_range or to_ms <= from_ms):
+        # Ledger rows exist without any inventory observation: keep them, but the
+        # unobserved inventory side is a gap, never a clean history.
+        if from_ms < to_ms:
+            coverage.append(
+                TimelineCoverage(
+                    scope=ClusterScope(workspace_id=workspace_id, cluster_id=cluster_id),
+                    source="inventory",
+                    from_ms=from_ms,
+                    to_ms=to_ms,
+                    reason="collection_gap",
+                )
+            )
+        reasons.append("collection_gap")
+        return _finish(reasons, coverage, status="partial")
     if not in_range or to_ms <= from_ms:
         # No events are returned for an unobserved window, so nothing was truncated.
         reasons = [reason for reason in reasons if reason != "truncated"]
@@ -94,7 +125,22 @@ def assess_completeness(
     if gaps:
         coverage.extend(gaps)
         reasons.append("collection_gap")
-    partial = _partial_cut_intervals(in_range, to_ms=to_ms, scope=(workspace_id, cluster_id))
+    scope = (workspace_id, cluster_id)
+    partial = _partial_cut_intervals(
+        in_range,
+        to_ms=to_ms,
+        scope=scope,
+        source="inventory",
+        proven=lambda o: o.resources_complete,
+    )
+    if events_authorized:
+        partial += _partial_cut_intervals(
+            in_range,
+            to_ms=to_ms,
+            scope=scope,
+            source="kubernetes_event",
+            proven=lambda o: o.event_capture_complete,
+        )
     if partial:
         coverage.extend(partial)
         reasons.append("partial_scope")
@@ -180,9 +226,17 @@ def observation_from_snapshot_row(row: Mapping[str, object]) -> InventoryObserva
     summary = row.get("summary")
     proof = summary.get(COMPLETE_CUT_PROOF_KEY) if isinstance(summary, Mapping) else None
     complete = isinstance(proof, Mapping) and proof.get("resources_complete") is True
+    capture = row.get("event_capture")
+    capture_complete = (
+        isinstance(capture, Mapping)
+        and capture.get("complete") is True
+        and capture.get("truncated") is False
+        and capture.get("reason") == EVENT_CAPTURE_REASON_COMPLETE
+    )
     return InventoryObservation(
         collected_at_ms=int(_utc(collected_at).timestamp() * 1_000),
         resources_complete=complete,
+        event_capture_complete=capture_complete,
     )
 
 
@@ -251,11 +305,13 @@ def _partial_cut_intervals(
     *,
     to_ms: int,
     scope: tuple[str, str],
+    source: Literal["inventory", "kubernetes_event"],
+    proven: Callable[[InventoryObservation], bool],
 ) -> list[TimelineCoverage]:
     cluster_scope = ClusterScope(workspace_id=scope[0], cluster_id=scope[1])
     intervals: list[TimelineCoverage] = []
     for index, item in enumerate(observations):
-        if item.resources_complete:
+        if proven(item):
             continue
         end = observations[index + 1].collected_at_ms if index + 1 < len(observations) else to_ms
         start = max(item.collected_at_ms, 0)
@@ -263,7 +319,7 @@ def _partial_cut_intervals(
             intervals.append(
                 TimelineCoverage(
                     scope=cluster_scope,
-                    source="inventory",
+                    source=source,
                     from_ms=start,
                     to_ms=end,
                     reason="partial_scope",

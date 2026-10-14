@@ -13,6 +13,7 @@ from domains.identity.dependencies import require_cluster_access, require_sessio
 from domains.rca.history import (
     OBSERVATION_MAX_GAP_MS,
     assess_completeness,
+    effective_window,
     incident_history_window,
     observation_from_snapshot_row,
     project_resources,
@@ -62,7 +63,9 @@ async def get_incident_history(
     # The gate is the same RCA grant as the bundle API; denial and absence look alike.
     _require_or_not_found(db, current, workspace_id, cluster_id, Permission.RCA_READ)
 
-    window = _requested_window(report, from_ms=from_ms, to_ms=to_ms)
+    now_ms = _now_ms()
+    # The response never speaks for time that has not happened yet.
+    window = effective_window(_requested_window(report, from_ms=from_ms, to_ms=to_ms), now_ms)
     inventory_authorized = _is_granted(
         db, current, workspace_id, cluster_id, Permission.INVENTORY_READ
     )
@@ -94,15 +97,19 @@ async def get_incident_history(
         if inventory_authorized
         else []
     )
-    evidence_rows = await asyncio.to_thread(
-        db.list_evidence_windows_by_correlation,
-        workspace_id,
-        cluster_id,
-        correlation_id,
-        limit=MAX_EVIDENCE_REFERENCES,
+    # Evidence keys and event ids are evidence.read metadata; without the grant they stay hidden.
+    evidence_rows = (
+        await asyncio.to_thread(
+            db.list_evidence_windows_by_correlation,
+            workspace_id,
+            cluster_id,
+            correlation_id,
+            limit=MAX_EVIDENCE_REFERENCES,
+        )
+        if events_authorized
+        else []
     )
 
-    now_ms = _now_ms()
     observations = [
         observation
         for row in observation_rows
@@ -117,9 +124,11 @@ async def get_incident_history(
         truncated=snapshot.truncated,
         source_unavailable=not (inventory_authorized and events_authorized),
         inventory_authorized=inventory_authorized,
+        events_authorized=events_authorized,
+        has_events=bool(snapshot.events),
     )
     unavailable = completeness.status == "unavailable"
-    events = () if unavailable else _ordered(snapshot.events)
+    events = _ordered(snapshot.events)
     return IncidentHistoryResponse(
         correlation_id=correlation_id,
         cluster_id=cluster_id,

@@ -81,7 +81,7 @@ def _window(from_minutes: float = 0, to_minutes: float = 30) -> TimelineWindow:
 
 
 def _complete(minutes: float) -> InventoryObservation:
-    return InventoryObservation(BASE_MS + int(minutes * MINUTE_MS), True)
+    return InventoryObservation(BASE_MS + int(minutes * MINUTE_MS), True, True)
 
 
 def _partial(minutes: float) -> InventoryObservation:
@@ -355,12 +355,11 @@ def _proven(minutes: float) -> dict[str, Any]:
         "collected_at": _at(minutes),
         "status": "accepted",
         "summary": {COMPLETE_CUT_PROOF_KEY: {"resources_complete": True}},
+        "event_capture": {"complete": True, "truncated": False, "reason": "complete"},
     }
 
 
-def _client(
-    monkeypatch: pytest.MonkeyPatch, db: _FakeDb, granted: set[Permission]
-) -> TestClient:
+def _client(monkeypatch: pytest.MonkeyPatch, db: _FakeDb, granted: set[Permission]) -> TestClient:
     def fake_access(
         _db: Any, _current: Any, _workspace: str, _cluster: str, action: str, **__: Any
     ) -> None:
@@ -411,16 +410,79 @@ def test_complete_history_with_no_events_is_reported_as_observed_empty(
     assert body["evidence"][0]["event_id"] == "e-1"
 
 
-def test_events_without_any_observation_are_withheld_as_unavailable(
+def test_events_without_any_observation_are_kept_but_never_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = _FakeDb(report=_report(), events=(_event("add", 1, uid="uid-1"),))
 
     body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
 
+    assert body["completeness"]["status"] == "partial"
+    assert "collection_gap" in body["completeness"]["reasons"]
+    assert len(body["events"]) == 1
+
+
+def test_no_events_and_no_observation_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _FakeDb(report=_report())
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
     assert body["completeness"]["status"] == "unavailable"
     assert body["events"] == []
-    assert body["resources"] == []
+
+
+def test_evidence_references_are_hidden_without_evidence_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeDb(report=_report(), observations=[_proven(m) for m in (1, 6, 12, 18, 25)])
+    client = _client(monkeypatch, db, {Permission.RCA_READ, Permission.INVENTORY_READ})
+
+    response = client.get(f"/incidents/c-1/history?{_window_query()}")
+
+    assert response.json()["evidence"] == []
+    assert "k-1" not in response.text and "e-1" not in response.text
+    assert response.json()["completeness"]["reasons"] == ["source_unavailable"]
+
+
+def test_future_window_is_clamped_and_not_called_complete_for_unobserved_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeDb(report=_report(), observations=[_proven(m) for m in (1, 6, 12, 18, 25)])
+    client = _client(monkeypatch, db, ALL)
+    now_ms = BASE_MS + 30 * MINUTE_MS
+    monkeypatch.setattr(history_router, "_now_ms", lambda: now_ms)
+
+    body = client.get(f"/incidents/c-1/history?from_ms={BASE_MS}&to_ms={now_ms + 3_600_000}").json()
+
+    assert body["window"]["to_ms"] == now_ms
+    assert body["completeness"]["status"] == "complete"
+
+
+def test_future_only_window_is_never_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _FakeDb(report=_report(), observations=[_proven(m) for m in (1, 6, 12, 18, 25)])
+    client = _client(monkeypatch, db, ALL)
+    monkeypatch.setattr(history_router, "_now_ms", lambda: BASE_MS)
+
+    body = client.get(
+        f"/incidents/c-1/history?from_ms={BASE_MS + 600_000}&to_ms={BASE_MS + 1_200_000}"
+    ).json()
+
+    assert body["completeness"]["status"] == "unavailable"
+
+
+def test_inventory_cuts_do_not_vouch_for_kubernetes_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [_proven(m) for m in (1, 6, 12, 18, 25)]
+    for row in rows:
+        row["event_capture"] = None
+    db = _FakeDb(report=_report(), observations=rows)
+
+    body = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}").json()
+
+    assert body["completeness"]["status"] == "partial"
+    assert "partial_scope" in body["completeness"]["reasons"]
+    assert {item["source"] for item in body["completeness"]["coverage"]} == {"kubernetes_event"}
 
 
 def test_denied_inventory_source_is_omitted_without_naming_it(

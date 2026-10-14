@@ -1077,7 +1077,7 @@ class InventoryRepository(DatabaseConnection):
         lower = datetime.fromtimestamp(max(window.from_ms - margin_ms, 0) / 1_000, tz=UTC)
         upper = datetime.fromtimestamp(window.to_ms / 1_000, tz=UTC)
         statement = (
-            select(table.c.collected_at, table.c.status, table.c.summary)
+            select(table.c.collected_at, table.c.status, table.c.summary, table.c.event_capture)
             .where(
                 table.c.workspace_id == workspace_id,
                 table.c.cluster_id == cluster_id,
