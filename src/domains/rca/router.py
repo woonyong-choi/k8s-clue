@@ -30,6 +30,7 @@ from domains.rca.events import (
     RecoveryRetryRequestedBody,
     compact_cluster_evidence_payload,
 )
+from domains.rca.history_ingest import evidence_inventory_payload
 from domains.rca.recovery_verification import (
     DEFAULT_MAXIMUM_SECONDS,
     normalized_utc,
@@ -254,6 +255,7 @@ async def agent_evidence(
         agent_id=evidence_body.agent_id,
         event_envelope=event_envelope,
         payload=evidence_body.to_body(),
+        inventory_payload=evidence_inventory_payload(payload.kubernetes),
     )
     return AcceptedResponse(
         accepted=True,

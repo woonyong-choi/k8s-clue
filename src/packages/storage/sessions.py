@@ -262,9 +262,8 @@ class RedisSessionStore:
             auth_mode=auth_mode,
         )
         await self._with_client(
-            lambda client: client.setex(
+            lambda client: client.set(
                 f"{self.config.key_prefix}:{token}",
-                self.config.ttl_seconds,
                 json.dumps(
                     {
                         "user_id": session.user_id,
@@ -275,6 +274,7 @@ class RedisSessionStore:
                         "auth_mode": session.auth_mode,
                     }
                 ),
+                ex=self.config.ttl_seconds,
             )
         )
         return session

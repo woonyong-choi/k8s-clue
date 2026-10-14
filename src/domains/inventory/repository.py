@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from domains.inventory.change_correlation import correlate_inventory_timeline_events
 from domains.inventory.coverage import (
+    InventoryDeleteScope,
     inventory_delete_scope_predicate,
     inventory_deletion_scopes,
     inventory_row_in_deletion_scopes,
@@ -46,6 +47,11 @@ from domains.inventory.models import (
     timeline_coverage_snapshot_clause,
 )
 from domains.inventory.resource_types import project_inventory_product_counts
+from domains.inventory.snapshot_evidence import (
+    COMPLETE_CUT_PROOF_KEY,
+    FIRST_OBSERVATION_BASIS,
+    SCOPED_COVERAGE_AUTHORITY_KEY,
+)
 from domains.inventory_filter.repository import (
     inventory_snapshot_lock_key,
     sync_inventory_filter_projection,
@@ -469,14 +475,51 @@ def inventory_timeline_events(
     resources_complete: bool,
     previous_event_batch: KubernetesEventFactBatch | None = None,
     current_event_batch: KubernetesEventFactBatch | None = None,
+    delete_scopes: Sequence[InventoryDeleteScope] = (),
 ) -> tuple[TimelineEvent, ...]:
     """Derive durable inventory and Kubernetes Event facts from one collection cut.
 
     An incomplete collection may be missing arbitrary namespaces or resource kinds, so it
-    cannot truthfully establish inventory additions or deletions. Kubernetes Event facts
+    cannot truthfully establish a creation.  It records what it saw: a first observation
+    (never dated as a creation), a change of a resource seen before, and an absence only
+    inside a ``delete_scopes`` entry the producer proved complete.  Kubernetes Event facts
     use a separate complete-capture proof because Event absence never means deletion.
     """
     inventory_events: tuple[TimelineEvent, ...] = ()
+    if not resources_complete:
+        previous_by_key = {
+            str(row["inventory_key"]): row
+            for row in previous_rows
+            if is_timeline_inventory_resource(row)
+        }
+        current_by_key = {
+            str(row["inventory_key"]): row
+            for row in current_rows
+            if is_timeline_inventory_resource(row)
+        }
+        scoped_changes: list[tuple[InventoryTimelineChange, Mapping[str, object], bool]] = []
+        for inventory_key in sorted(current_by_key):
+            current = current_by_key[inventory_key]
+            previous = previous_by_key.get(inventory_key)
+            if previous is None:
+                scoped_changes.append(("add", current, True))
+            elif inventory_resource_changed(previous, current):
+                scoped_changes.append(("update", current, False))
+        for inventory_key in sorted(set(previous_by_key) - set(current_by_key)):
+            previous = previous_by_key[inventory_key]
+            if inventory_row_in_deletion_scopes(previous, delete_scopes):
+                scoped_changes.append(("delete", previous, False))
+        inventory_events = tuple(
+            inventory_change_timeline_event(
+                workspace_id=workspace_id,
+                cluster_id=cluster_id,
+                observed_at=observed_at,
+                event_type=event_type,
+                resource=resource,
+                first_observation=first_observation,
+            )
+            for event_type, resource, first_observation in scoped_changes
+        )
     if resources_complete:
         previous_by_key = {
             str(row["inventory_key"]): row
@@ -634,8 +677,13 @@ def inventory_change_timeline_event(
     observed_at: datetime,
     event_type: InventoryTimelineChange,
     resource: Mapping[str, object],
+    first_observation: bool = False,
 ) -> TimelineEvent:
-    """Map one resource delta without exposing raw resource data or ledger position."""
+    """Map one resource delta without exposing raw resource data or ledger position.
+
+    ``first_observation`` marks an add that only says the resource was seen; it is dated
+    by the collection, never by an invented creation time.
+    """
     inventory_key = str(resource["inventory_key"])
     kind = str(resource.get("kind") or resource.get("resource_type") or "Resource")
     name = str(resource.get("name") or inventory_key)
@@ -645,6 +693,8 @@ def inventory_change_timeline_event(
     uid = str(uid_value) if uid_value is not None else None
     source_key = inventory_timeline_source_key(event_type, resource)
     verb = {"add": "added", "update": "updated", "delete": "deleted"}[event_type]
+    if first_observation:
+        verb = "first observed"
     return inventory_timeline_event(
         event_id=source_key,
         source_key=source_key,
@@ -659,6 +709,7 @@ def inventory_change_timeline_event(
         uid=uid,
         title=f"{kind} {name} {verb}",
         event_type=event_type,
+        metadata={"observation_basis": FIRST_OBSERVATION_BASIS} if first_observation else None,
     )
 
 
@@ -1035,6 +1086,62 @@ class InventoryRepository(DatabaseConnection):
             payload=payload,
         ).result
 
+    def save_inventory_snapshot_with_timeline(
+        self,
+        *,
+        workspace_id: str,
+        cluster_id: str,
+        agent_id: str,
+        payload: JsonObject,
+        append_timeline_events: Callable[[Sequence[TimelineEvent]], object],
+    ) -> JsonObject:
+        """Persist a snapshot and its Timeline facts in one transaction.
+
+        ``append_timeline_events`` is the ledger append of the same database
+        (``Database.append_timeline_events``).  Both writes join this unit of
+        work, so a ledger failure rolls the snapshot back and a re-sent cut is
+        absorbed by the ledger's source-key uniqueness instead of duplicating.
+        """
+        with self.unit_of_work():
+            mutation = self.save_inventory_snapshot_mutation(
+                workspace_id=workspace_id,
+                cluster_id=cluster_id,
+                agent_id=agent_id,
+                payload=payload,
+            )
+            if mutation.timeline_events:
+                append_timeline_events(mutation.timeline_events)
+        return mutation.result
+
+    def list_inventory_snapshot_observations(
+        self,
+        *,
+        workspace_id: str,
+        cluster_id: str,
+        window: TimelineWindow,
+        margin_ms: int,
+        limit: int = 1_000,
+    ) -> list[JsonObject]:
+        """Read accepted collection cuts around a window, newest bounded by ``limit``."""
+        table = ClusterInventorySnapshotRecord.__table__
+        lower = datetime.fromtimestamp(max(window.from_ms - margin_ms, 0) / 1_000, tz=UTC)
+        upper = datetime.fromtimestamp(window.to_ms / 1_000, tz=UTC)
+        statement = (
+            select(table.c.collected_at, table.c.status, table.c.summary, table.c.event_capture)
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.cluster_id == cluster_id,
+                table.c.status != "ignored_stale",
+                table.c.collected_at >= lower,
+                table.c.collected_at < upper,
+            )
+            .order_by(table.c.collected_at.desc(), table.c.snapshot_id.desc())
+            .limit(limit)
+        )
+        with self.connection() as conn:
+            rows = conn.execute(statement).mappings().all()
+        return [dict(row) for row in reversed(rows)]
+
     def save_inventory_snapshot_mutation(
         self,
         *,
@@ -1084,7 +1191,16 @@ class InventoryRepository(DatabaseConnection):
             partial_reason_codes.append("source_resources_truncated")
         elif not resources_complete:
             partial_reason_codes.append("source_resources_incomplete")
-        scoped_delete_scopes = inventory_deletion_scopes(source_summary)
+        # A scoped evidence snapshot is not fleet truth (live_inventory false) but its producer
+        # proof may still authorize deletions in exactly the namespaces it proved.
+        scoped_delete_scopes = inventory_deletion_scopes(
+            {**source_summary, "live_inventory": True}
+            if source_summary.get(SCOPED_COVERAGE_AUTHORITY_KEY) is True
+            else source_summary
+        )
+        # Only the writer knows whether this cut replaced the full resource list, so the
+        # proof is persisted; rows without it can never be read back as complete.
+        summary = {**summary, COMPLETE_CUT_PROOF_KEY: {"resources_complete": resources_complete}}
 
         with self.connection() as conn:
             conn.execute(
@@ -1162,6 +1278,7 @@ class InventoryRepository(DatabaseConnection):
                 resources_complete=resources_complete,
                 previous_event_batch=previous_event_batch,
                 current_event_batch=current_event_batch,
+                delete_scopes=scoped_delete_scopes,
             )
             previous_rows_for_deletion = (
                 previous_rows

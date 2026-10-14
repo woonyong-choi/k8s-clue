@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+# Persisted beside the agent summary so history never has to guess whether a cut was complete.
+COMPLETE_CUT_PROOF_KEY = "timeline_proof"
+# Set only on scoped evidence snapshots: they are not fleet truth (live_inventory false), yet their
+# per-namespace collection_coverage may still prove that a missing row was deleted.
+SCOPED_COVERAGE_AUTHORITY_KEY = "scoped_coverage_authority"
+FIRST_OBSERVATION_BASIS = "first_observed"
+
 
 def snapshot_source_summary(
     snapshot: Mapping[str, object] | None,
