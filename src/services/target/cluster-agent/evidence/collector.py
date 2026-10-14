@@ -124,9 +124,7 @@ class EvidenceCollector:
         )
         return {
             evidence_key: outcome.payload,
-            COLLECTION_STATUS_KEY: collection_status_payload(
-                {evidence_key: outcome.status}
-            ),
+            COLLECTION_STATUS_KEY: collection_status_payload({evidence_key: outcome.status}),
         }
 
     def _select_provider_keys(self, requested_keys: tuple[str, ...]) -> tuple[str, ...]:
@@ -231,11 +229,11 @@ class EvidenceCollector:
                     if completed_query_count > 0
                     else COLLECTION_UNAVAILABLE
                 )
-                reason_codes = (
-                    (PROVIDER_QUERY_FAILED_REASON,) if failed_query_count > 0 else ()
-                )
+                reason_codes = (PROVIDER_QUERY_FAILED_REASON,) if failed_query_count > 0 else ()
+                payload = provider.build_response(results)
+                state = payload_collection_state(payload, state)
                 return ProviderCollectionOutcome(
-                    payload=provider.build_response(results),
+                    payload=payload,
                     status=provider_collection_status(
                         provider,
                         state=state,
@@ -270,6 +268,24 @@ class EvidenceCollector:
                         reason_codes=(PROVIDER_QUERY_FAILED_REASON,),
                     ),
                 )
+
+
+def payload_collection_state(payload: ProviderResult, state: str) -> str:
+    if not isinstance(payload, dict) or state == COLLECTION_UNAVAILABLE:
+        return state
+    statuses = payload.get("provider_status", {})
+    values = (
+        [value.get("status") for value in statuses.values() if isinstance(value, dict)]
+        if isinstance(statuses, dict)
+        else []
+    )
+    if values and all(value == COLLECTION_UNAVAILABLE for value in values):
+        return COLLECTION_UNAVAILABLE
+    limits = payload.get("collection_limits", {})
+    is_truncated = isinstance(limits, dict) and limits.get("truncated") is True
+    if is_truncated or any(value not in {"success", COLLECTION_COMPLETED} for value in values):
+        return COLLECTION_PARTIAL
+    return state
 
 
 def provider_collection_status(

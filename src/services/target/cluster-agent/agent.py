@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Self
+import gzip
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Protocol, Self
 
 import httpx
-from evidence import EvidenceCollector, EvidenceJobScheduler
+from evidence import EvidenceCollector
 from providers import KubernetesSnapshotProvider, TelemetryProvider
+from queries import TelemetryQueryDefinition, TelemetryQueryRegistry
 
 from packages.config.constants import Target
 from packages.config.logs import CONTEXT_KEY, get_logger
@@ -15,10 +20,19 @@ from packages.config.settings import env
 from packages.contracts.event_bus.interfaces import JsonObject
 from packages.contracts.gateway import routes as gateway_routes
 from packages.contracts.gateway.fields import Gateway
+from packages.contracts.gateway.requests import AgentEvidenceRequest
 from packages.contracts.identity import DEFAULT_WORKSPACE_ID
-from packages.contracts.interfaces import ManagementPlaneClient
+from packages.contracts.target import TARGET_NAMESPACE
 
 LOGGER = get_logger(__name__)
+
+
+class EvidenceClient(Protocol):
+    async def register_agent(
+        self, cluster_id: str, agent_id: str, capabilities: list[str]
+    ) -> None: ...
+
+    async def send_evidence(self, payload: JsonObject) -> None: ...
 
 
 class AgentConfig:
@@ -69,6 +83,24 @@ class HttpManagementPlaneClient:
     async def __aexit__(self, *_exc: object) -> None:
         await self.client.aclose()
 
+    # cost: time O(n), heap O(n), stack O(1), io 1
+    # vars: n = serialized evidence bytes
+    # basis: estimate
+    async def send_evidence(self, payload: JsonObject) -> None:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        headers = {**self.headers, "content-type": "application/json"}
+        if len(body) >= 1024:
+            compressed = gzip.compress(body, compresslevel=1, mtime=0)
+            if len(compressed) < len(body):
+                body = compressed
+                headers["content-encoding"] = "gzip"
+        response = await self.client.post(
+            f"{self.base_url}{gateway_routes.AGENT_EVIDENCE_PATH}",
+            content=body,
+            headers=headers,
+        )
+        response.raise_for_status()
+
     async def register_agent(
         self,
         cluster_id: str,
@@ -90,72 +122,13 @@ class HttpManagementPlaneClient:
         )
         response.raise_for_status()
 
-    async def schedule_evidence_jobs(
-        self,
-        source_id: str,
-        window_start: str,
-        provider_keys: list[str],
-    ) -> JsonObject:
-        response = await self.client.post(
-            f"{self.base_url}{gateway_routes.AGENT_EVIDENCE_JOB_SCHEDULE_PATH}",
-            json={
-                Gateway.SOURCE_ID: source_id,
-                Gateway.WINDOW_START: window_start,
-                Gateway.PROVIDER_KEYS: provider_keys,
-            },
-            headers=self.headers,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    async def poll_evidence_job(
-        self,
-        provider_key: str,
-        agent_id: str,
-        timeout_seconds: int,
-    ) -> JsonObject | None:
-        response = await self.client.get(
-            f"{self.base_url}{gateway_routes.AGENT_EVIDENCE_JOB_POLL_PATH}",
-            params={
-                Gateway.PROVIDER_KEY: provider_key,
-                Gateway.AGENT_ID: agent_id,
-                "timeout": timeout_seconds,
-            },
-            headers=self.headers,
-        )
-        response.raise_for_status()
-        return response.json().get(Gateway.JOB)
-
-    async def complete_evidence_job(
-        self,
-        job_id: str,
-        agent_id: str,
-        lease_id: str,
-        status: str,
-        result: JsonObject,
-        error: str,
-    ) -> JsonObject:
-        response = await self.client.post(
-            f"{self.base_url}{gateway_routes.agent_evidence_job_result_path(job_id)}",
-            json={
-                Gateway.AGENT_ID: agent_id,
-                Gateway.LEASE_ID: lease_id,
-                Gateway.STATUS: status,
-                Gateway.RESULT: result,
-                Gateway.ERROR: error,
-            },
-            headers=self.headers,
-        )
-        response.raise_for_status()
-        return response.json()
-
 
 class TargetClusterAgent:
     """Run Kubernetes evidence jobs; it has no command or mutation channel."""
 
     def __init__(
         self,
-        client: ManagementPlaneClient | None = None,
+        client: EvidenceClient | None = None,
         providers: tuple[TelemetryProvider, ...] | None = None,
         kubernetes_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -180,21 +153,22 @@ class TargetClusterAgent:
                 transport=kubernetes_transport,
             ),
         )
-        self.collector = EvidenceCollector(selected_providers)
-        provider_keys = tuple(self.collector.providers)
-        self.scheduler = EvidenceJobScheduler(
-            cluster_id=self.cluster_id,
-            workspace_id=self.workspace_id,
-            agent_id=self.agent_id,
-            source_id=AgentConfig.EVIDENCE_SOURCE_ID,
-            collector=self.collector,
-            provider_keys=provider_keys,
-            provider_worker_counts={key: 1 for key in provider_keys},
-            interval_seconds=interval,
+        registry = TelemetryQueryRegistry(
+            (
+                TelemetryQueryDefinition(
+                    source="kubernetes",
+                    name="namespace-snapshot",
+                    description="bounded namespace evidence",
+                    query=env("TARGET_NAMESPACE", TARGET_NAMESPACE),
+                ),
+            )
         )
+        self.collector = EvidenceCollector(selected_providers, registry)
+        self.interval_seconds = max(1, interval)
+        self.pending_evidence: JsonObject | None = None
         self.client = client
 
-    async def register(self, client: ManagementPlaneClient) -> None:
+    async def register(self, client: EvidenceClient) -> None:
         while True:
             try:
                 await client.register_agent(
@@ -216,9 +190,31 @@ class TargetClusterAgent:
                 )
                 await asyncio.sleep(AgentConfig.DEFAULT_REGISTER_RETRY_SECONDS)
 
-    async def run_with_client(self, client: ManagementPlaneClient) -> None:
+    async def collect_once(self, client: EvidenceClient) -> None:
+        if self.pending_evidence is None:
+            window_start = datetime.now(UTC).isoformat()
+            collected = await self.collector.collect()
+            payload = AgentEvidenceRequest(
+                **collected,
+                workspace_id=self.workspace_id,
+                cluster_id=self.cluster_id,
+                agent_id=self.agent_id,
+                source_id=AgentConfig.EVIDENCE_SOURCE_ID,
+                window_start=window_start,
+                evidence_key=str(uuid.uuid4()),
+            )
+            self.pending_evidence = payload.model_dump(exclude_none=True, exclude_defaults=True)
+        await client.send_evidence(self.pending_evidence)
+        self.pending_evidence = None
+
+    async def run_with_client(self, client: EvidenceClient) -> None:
         await self.register(client)
-        await self.scheduler.run(client)
+        while True:
+            try:
+                await self.collect_once(client)
+            except (httpx.HTTPError, ValueError) as exc:
+                LOGGER.warning("evidence submission failed: %s", type(exc).__name__)
+            await asyncio.sleep(self.interval_seconds)
 
     async def run(self) -> None:
         if self.client is not None:

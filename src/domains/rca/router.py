@@ -36,6 +36,7 @@ from domains.rca.recovery_verification import (
     standard_sli_series_identity,
     verification_deadline,
 )
+from domains.rca.transport import EvidenceRoute
 from packages.ai.rule_catalog import validate_catalog_yaml
 from packages.config.settings import env
 from packages.contracts.auth import Actor
@@ -73,7 +74,7 @@ from packages.storage.engine import unit_of_work_or_null
 from packages.storage.retry import to_thread_db_retry
 
 # per-cluster 토큰 인증 — evidence 의 workspace/cluster 는 토큰 identity 에서만 취함.
-router = APIRouter()
+router = APIRouter(route_class=EvidenceRoute)
 DEFAULT_EVIDENCE_SOURCE_ID = "cluster-snapshot"
 RECOVERY_PLAN_NOT_FOUND = "recovery plan not found"
 RECOVERY_ACTION_NOT_FOUND = "recovery action not found"
@@ -327,12 +328,8 @@ def validate_alertmanager_sli_labels(payload: AlertmanagerWebhookRequest) -> Non
         if any(not str(labels.get(key) or "").strip() for key in STANDARD_SLI_REQUIRED_LABELS):
             raise HTTPException(status_code=422, detail=STANDARD_SLI_LABELS_INVALID)
         measurements = standard_sli_measurements(alert)
-        if (
-            measurements is None
-            or (
-                alert.status.strip().lower() == "firing"
-                and measurements[0] <= measurements[1]
-            )
+        if measurements is None or (
+            alert.status.strip().lower() == "firing" and measurements[0] <= measurements[1]
         ):
             raise HTTPException(status_code=422, detail=STANDARD_SLI_MEASUREMENT_INVALID)
 
@@ -395,8 +392,10 @@ def alertmanager_kubernetes_hint(payload: AlertmanagerWebhookRequest) -> dict[st
     def text(value: object) -> str:
         return str(value or "").strip()
 
-    symptom = text(annotations.get("kyro_symptom")) or text(labels.get("kyro_symptom")) or text(
-        labels.get("alertname")
+    symptom = (
+        text(annotations.get("kyro_symptom"))
+        or text(labels.get("kyro_symptom"))
+        or text(labels.get("alertname"))
     )
     hint: dict[str, Any] = {}
     if symptom:
@@ -406,7 +405,8 @@ def alertmanager_kubernetes_hint(payload: AlertmanagerWebhookRequest) -> dict[st
         hint["resource"] = {
             "kind": text(labels.get("kyro_resource_kind")) or "Deployment",
             "name": resource_name,
-            "namespace": text(labels.get("kyro_namespace")) or text(labels.get("namespace"))
+            "namespace": text(labels.get("kyro_namespace"))
+            or text(labels.get("namespace"))
             or None,
         }
     severity = text(labels.get("severity"))
@@ -476,9 +476,9 @@ def build_alertmanager_alert_event(
     labels = {str(key): str(value) for key, value in alert.labels.items()}
     annotations = {str(key): str(value) for key, value in alert.annotations.items()}
     alert_name = (labels.get("alertname") or "External alert")[:120]
-    namespace = (
-        labels.get("kyro_namespace") or labels.get("namespace") or ""
-    ).strip()[:253] or None
+    namespace = (labels.get("kyro_namespace") or labels.get("namespace") or "").strip()[
+        :253
+    ] or None
     if labels.get("kyro_resource_name"):
         kind = labels.get("kyro_resource_kind") or "Workload"
         name = labels["kyro_resource_name"]
@@ -860,9 +860,7 @@ async def _select_recovery_action_from_record(
                     else "recovery_action_preflight_unavailable"
                 ),
                 missing_evidence=(
-                    ["gitops_authority_context"]
-                    if is_safe_pr
-                    else ["command_control_policy"]
+                    ["gitops_authority_context"] if is_safe_pr else ["command_control_policy"]
                 ),
                 diagnostics={
                     "plan_id": plan.plan_id,
