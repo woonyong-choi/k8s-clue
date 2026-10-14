@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clue-live-recovery
+  namespace: clue-live-recovery
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clue-live-recovery
+  template:
+    metadata:
+      labels:
+        app: clue-live-recovery
+    spec:
+      containers:
+        - name: app
+          image: busybox:clue-missing-image
+          command: ["sh", "-c", "sleep 3600"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
