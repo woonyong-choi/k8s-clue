@@ -2,15 +2,15 @@
 
 ## Runtime
 
-기본 제어면은 15개 서비스를 단일 Controller 프로세스로 조합한다. 대상 에이전트를 포함하면 16개 서비스다.
+기본 제어면은 11개 서비스를 단일 Controller 프로세스로 조합한다. 대상 에이전트를 포함하면 12개 서비스다.
 
 | 구간 | 서비스 |
 |---|---|
-| 진입·전달 | `api-gateway`, `dispatch-worker`, `outbox-relay`, `dead-letter-monitor` |
+| 진입·전달 | `api-gateway`, `outbox-relay`, `dead-letter-monitor` |
 | 증거·사건 | `evidence-worker`, `incident-worker` |
-| RCA | `plan-worker`, `analyze-worker`, `rca-worker`, `rca-feedback-worker` |
-| 안전한 변경 | `select-worker`, `safe-pr-worker`, `scm-worker` |
-| 사후 검증 | `recovery-worker` |
+| RCA | `rca-worker`, `rca-feedback-worker` |
+| 안전한 변경 | `safe-pr-worker`, `scm-worker` |
+| 복구 계획·선택·전달, 사후 검증 | `recovery-worker` |
 | 보조 | `ai-diff-worker` |
 
 대상 클러스터에는 `cluster-agent` 하나만 배포합니다. agent는 Kubernetes snapshot 수집 capability만 등록하며 command, terminal, port-forward, node collector, traffic provider를 포함하지 않습니다.
