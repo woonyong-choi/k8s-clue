@@ -43,10 +43,13 @@ class App:
         self.name = self.spec.name
         self._handlers: dict[EventSubject, Subscription] = {}
         self._raw: tuple[Callable[..., Any], bool] | None = None
+        self._consumers: dict[EventSubject, str] = {}
 
-    def on(self, body_type: type) -> Callable[..., Any]:
+    def on(self, body_type: type, *, consumer: str | None = None) -> Callable[..., Any]:
         """
         타입 구독: 이 body 가 실린 이벤트 1종을 받음.
+
+        consumer: 워커를 병합할 때 기존 durable·ledger·DLQ consumer 이름을 subject 별로 유지.
         """
         require(self._raw is None, f"{self.name}: @app.on·@app.on_any 혼용 불가", TypeError)
         subject = ensure_registered(body_type)
@@ -55,6 +58,8 @@ class App:
             ensure_unique_handler(self._handlers, subject)
             sub = Subscription(subject, body_type, fn, ensure_handler_signature(fn))
             self._handlers[subject] = sub
+            if consumer is not None:
+                self._consumers[subject] = consumer
             events.note_handler(self.name, sub)  # 카탈로그 표시용
             return fn
 
@@ -84,7 +89,13 @@ class App:
         from packages.runtime.service import WorkerService
 
         subjects, factory = self._resolve()
-        WorkerService(self.name, tuple(subjects), factory, bus=bus).run()
+        WorkerService(
+            self.name,
+            tuple(subjects),
+            factory,
+            bus=bus,
+            consumers=self.consumer_pins(),
+        ).run()
 
     def handler_spec(self) -> Any:
         """Return the worker runtime spec for an external composition root."""
@@ -95,7 +106,12 @@ class App:
             service_name=self.name,
             subjects=tuple(subjects),
             handler_factory=factory,
+            consumers=self.consumer_pins(),
         )
+
+    def consumer_pins(self) -> tuple[tuple[str, str], ...]:
+        """(subject, 유지할 consumer 이름) 쌍. 지정한 subject 만 포함."""
+        return tuple((str(subject), name) for subject, name in self._consumers.items())
 
     def _resolve(self) -> tuple[list[str], Callable[..., Any]]:
         """구독 방식별 (subject 목록, 핸들러 factory) 구성 — 전체구독은 '>' 하나, 타입구독은 subject별 라우터."""
