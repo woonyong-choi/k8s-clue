@@ -177,6 +177,62 @@ describe("getIncidentHistory", () => {
     await expect(getIncidentHistory("incident/1")).rejects.toThrow("invalid");
   });
 
+  it("getIncidentHistory_complete_with_coverage_gap_is_rejected", async () => {
+    const body = historyBody();
+    body.completeness.coverage = [{ source: "inventory", from_ms: 1, to_ms: 2, reason: "collection_gap" }];
+    respond(body);
+    await expect(getIncidentHistory("incident/1")).rejects.toThrow("invalid");
+  });
+
+  it("getIncidentHistory_partial_with_coverage_gap_is_accepted", async () => {
+    const body = historyBody();
+    body.completeness = {
+      status: "partial",
+      coverage: [{ source: "inventory", from_ms: 1, to_ms: 2, reason: "collection_gap" }],
+      reasons: ["collection_gap"],
+    };
+    respond(body);
+    await expect(getIncidentHistory("incident/1")).resolves.toEqual(body);
+  });
+
+  it.each([
+    ["window_beyond_date_range", { from_ms: 1, to_ms: 8_640_000_000_000_001 }],
+    ["window_zero_width", { from_ms: 5, to_ms: 5 }],
+    ["window_reversed", { from_ms: 9, to_ms: 5 }],
+    ["window_negative_start", { from_ms: -1, to_ms: 5 }],
+    ["window_fractional", { from_ms: 1.5, to_ms: 5 }],
+  ])("getIncidentHistory_%s_is_rejected", async (_name, window) => {
+    respond({ ...historyBody(), window });
+    await expect(getIncidentHistory("incident/1")).rejects.toThrow("invalid");
+  });
+
+  it("getIncidentHistory_coverage_beyond_date_range_is_rejected", async () => {
+    const body = historyBody();
+    body.completeness = {
+      status: "partial",
+      coverage: [{ source: "inventory", from_ms: 1, to_ms: 9e15, reason: "collection_gap" }],
+      reasons: ["collection_gap"],
+    };
+    respond(body);
+    await expect(getIncidentHistory("incident/1")).rejects.toThrow("invalid");
+  });
+
+  it.each([
+    "2023-11-14T22:00:00+09:00",
+    "2023-11-14 22:00:00Z",
+    "2023-13-45T99:00:00Z",
+    "not-a-time",
+  ])("getIncidentHistory_non_utc_or_invalid_time_%s_is_rejected", async (occurredAt) => {
+    const body = historyBody();
+    body.events = [{
+      event_id: "e", source: "incident", source_key: "k", event_type: "incident", severity: "info",
+      occurred_at: occurredAt, title: "t", metadata: {},
+      subject: { kind: "incident", incident_id: "i", correlation_id: null },
+    }];
+    respond(body);
+    await expect(getIncidentHistory("incident/1")).rejects.toThrow("invalid");
+  });
+
   it("getIncidentHistory_404_throws_http_error_with_status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
     await expect(getIncidentHistory("incident/1")).rejects.toMatchObject({

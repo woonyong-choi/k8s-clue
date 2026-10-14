@@ -269,8 +269,7 @@ function isIncidentHistory(value: unknown): value is IncidentHistory {
   if (
     typeof value.correlation_id !== "string"
     || typeof value.cluster_id !== "string"
-    || !isFiniteNumber(value.window.from_ms)
-    || !isFiniteNumber(value.window.to_ms)
+    || !isEpochRange(value.window.from_ms, value.window.to_ms)
     || typeof value.truncated !== "boolean"
     || !isList(value.events, isHistoryEvent)
     || !isList(value.resources, isHistoryResource)
@@ -284,6 +283,7 @@ function isIncidentHistory(value: unknown): value is IncidentHistory {
   const reasons = completeness.reasons as string[];
   if (value.truncated && (status !== "partial" || !reasons.includes("truncated"))) return false;
   if (status === "complete" && (reasons.length > 0 || value.truncated)) return false;
+  if (status === "complete" && completeness.coverage.length > 0) return false;
   if (status === "unavailable" && (value.events.length > 0 || !reasons.includes("no_observation"))) {
     return false;
   }
@@ -293,8 +293,9 @@ function isIncidentHistory(value: unknown): value is IncidentHistory {
 function isHistoryEvent(value: unknown): value is HistoryEvent {
   return (
     isRecord(value)
-    && ["event_id", "source", "source_key", "event_type", "severity", "occurred_at", "title"]
+    && ["event_id", "source", "source_key", "event_type", "severity", "title"]
       .every((field) => typeof value[field] === "string")
+    && isUtcTimestamp(value.occurred_at)
     && isHistorySubject(value.subject)
     && isRecord(value.metadata)
   );
@@ -335,9 +336,9 @@ function isHistoryResource(value: unknown): value is HistoryResource {
   const bound = value.deleted_at_bound;
   return (
     ["present", "deleted", "unobserved"].includes(value.lifecycle as string)
-    && isNullableString(value.first_observed_at)
-    && isNullableString(value.last_observed_at)
-    && isNullableString(value.deleted_at)
+    && isNullableUtcTimestamp(value.first_observed_at)
+    && isNullableUtcTimestamp(value.last_observed_at)
+    && isNullableUtcTimestamp(value.deleted_at)
     && (bound === null || bound === "observed" || bound === "gap_bounded")
     && (value.deleted_at === null) === (bound === null)
   );
@@ -347,8 +348,7 @@ function isHistoryCoverage(value: unknown): value is HistoryCoverage {
   return (
     isRecord(value)
     && typeof value.source === "string"
-    && isFiniteNumber(value.from_ms)
-    && isFiniteNumber(value.to_ms)
+    && isEpochRange(value.from_ms, value.to_ms)
     && COVERAGE_REASONS.includes(value.reason as string)
   );
 }
@@ -356,8 +356,9 @@ function isHistoryCoverage(value: unknown): value is HistoryCoverage {
 function isHistoryEvidence(value: unknown): boolean {
   return (
     isRecord(value)
-    && ["evidence_key", "source_id", "window_start", "event_id", "observed_at"]
+    && ["evidence_key", "source_id", "window_start", "event_id"]
       .every((field) => typeof value[field] === "string")
+    && isUtcTimestamp(value.observed_at)
   );
 }
 
@@ -371,8 +372,25 @@ function isList(value: unknown, guard: (item: unknown) => boolean): boolean {
   return Array.isArray(value) && value.every(guard);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+const MAX_EPOCH_MS = 8_640_000_000_000_000;
+const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u;
+
+/** 계약의 epoch ms 범위: 양의 너비를 갖고 Date가 표현할 수 있는 정수 구간. */
+function isEpochRange(from: unknown, to: unknown): boolean {
+  return (
+    typeof from === "number" && typeof to === "number"
+    && Number.isInteger(from) && Number.isInteger(to)
+    && from >= 0 && to > from && to <= MAX_EPOCH_MS
+  );
+}
+
+/** 계약의 시각은 UTC `Z`로 직렬화되며 실제로 해석 가능한 값이어야 한다. */
+function isUtcTimestamp(value: unknown): value is string {
+  return typeof value === "string" && UTC_TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function isNullableUtcTimestamp(value: unknown): value is string | null {
+  return value === null || isUtcTimestamp(value);
 }
 
 function isNullableString(value: unknown): value is string | null {
