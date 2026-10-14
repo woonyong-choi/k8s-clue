@@ -156,6 +156,9 @@ def project_resources(
     gaps = tuple(coverage)
     grouped: dict[ResourceKey, list[TimelineEvent]] = {}
     for event in events:
+        # A Kubernetes Event fact names the Event object, not the resource it concerns.
+        if event.source != "inventory":
+            continue
         key = _resource_key(event)
         if key is not None:
             grouped.setdefault(key, []).append(event)
@@ -165,21 +168,9 @@ def project_resources(
     for key in sorted(grouped):
         items = sorted(grouped[key], key=lambda item: (item.occurred_at, item.source_key))
         subject = _history_subject(items[-1])
-        inventory = [item for item in items if item.source == "inventory"]
         first = _utc(items[0].occurred_at)
         last = _utc(items[-1].occurred_at)
-        if not inventory:
-            # Seen only through Kubernetes Events: the resource itself was never inventoried.
-            resources.append(
-                IncidentHistoryResource(
-                    subject=subject,
-                    lifecycle="unobserved",
-                    first_observed_at=first,
-                    last_observed_at=last,
-                )
-            )
-            continue
-        latest = inventory[-1]
+        latest = items[-1]
         replaced = replacements.get(key)
         if (
             replaced is not None

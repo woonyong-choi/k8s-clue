@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -396,6 +397,28 @@ def seed_synthetic(db: Any, *, now: datetime | None = None) -> dict[str, datetim
     return {"anchor": anchor}
 
 
+SYNTHETIC_TABLES = (
+    "rca_reports",
+    "recovery_plans",
+    "timeline_events",
+    "timeline_event_cursors",
+    "cluster_inventory_resources",
+    "cluster_inventory_snapshots",
+    "evidence_windows",
+    "outbox",
+)
+
+
+def reset_synthetic(db: Any) -> None:
+    """Delete only the synthetic workspace so repeated starts never accumulate or touch others."""
+    with db.connection() as conn:
+        for table in SYNTHETIC_TABLES:
+            conn.execute(
+                text(f"delete from {table} where workspace_id = :w"),  # noqa: S608
+                {"w": SYNTHETIC_WORKSPACE},
+            )
+
+
 def serve_synthetic(port: int) -> None:
     from types import SimpleNamespace
 
@@ -403,6 +426,7 @@ def serve_synthetic(port: int) -> None:
     from fastapi import FastAPI, HTTPException
 
     from domains.rca import history_router
+    from domains.rca_bundle import router as rca_bundle_router
     from packages.runtime.dependencies import get_db
 
     os.environ["DATABASE_URL"] = DB_URL
@@ -410,14 +434,16 @@ def serve_synthetic(port: int) -> None:
 
     database = Database()
     database.init()
-    if _count(database, "select count(*) from rca_reports") == 0:
-        seed_synthetic(database)
+    reset_synthetic(database)
+    seed_synthetic(database)
 
     def synthetic_access(_db, current, _workspace, _cluster, action, **_):
         if action not in current.grants:
             raise HTTPException(status_code=403, detail="denied")
 
+    # 권한 대역: 실제 인증·권한 체인을 거치지 않고 헤더의 permission 집합으로 판정한다.
     history_router.require_cluster_access = synthetic_access  # type: ignore[assignment]
+    rca_bundle_router.require_cluster_access = synthetic_access  # type: ignore[assignment]
     app = FastAPI()
 
     @app.middleware("http")
@@ -435,7 +461,423 @@ def serve_synthetic(port: int) -> None:
             grants={item.strip() for item in raw.split(",") if item.strip()},
         )
 
+    # 화면은 rca bundle 조회가 성공해야 history를 그리므로 기존 bundle 라우터도 함께 올린다.
+    app.include_router(rca_bundle_router.router)
     app.include_router(history_router.router)
     app.dependency_overrides[history_router.require_session] = synthetic_session
+    app.dependency_overrides[rca_bundle_router.require_session] = synthetic_session
     app.dependency_overrides[get_db] = lambda: database
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+
+# --- 실제 게이트웨이(인증·권한 체인 포함) 합성 데이터 서버 -------------------------------
+# 실제 ApiGateway를 Postgres와 Redis 세션 저장소, 프로세스 내 이벤트 버스로 올린다.
+# 인증은 실제 로그인 세션 쿠키, 에이전트는 실제 토큰 해시 조회를 거친다. 합성 값만 쓴다.
+# 실행: INCIDENT_HISTORY_TEST_DATABASE_URL=... INCIDENT_HISTORY_TEST_REDIS_URL=... uv run python -c \
+#   "import sys; sys.path[:0]=['src','tests','src/services/gateway/api-gateway']; \
+#    import test_incident_history_db as t; t.serve_real_gateway(18766)"
+
+REAL_WORKSPACE = "real-ws"
+REAL_CLUSTER = "real-cluster"
+REAL_AGENT_TOKEN = "synthetic-agent-token-real-cluster"
+REAL_PASSWORD = "Synthetic-Passw0rd!"
+REAL_VIEWER = ("real-viewer", "viewer@synthetic.invalid")
+REAL_OUTSIDER = ("real-outsider", "outsider@synthetic.invalid")
+
+
+@dataclass(frozen=True)
+class RealCase:
+    """One isolated workspace, cluster, agent token and pair of users."""
+
+    workspace: str
+    cluster: str
+    agent_token: str
+    viewer: tuple[str, str]
+    outsider: tuple[str, str]
+
+
+def real_case(suffix: str = "") -> RealCase:
+    tag = f"-{suffix}" if suffix else ""
+    return RealCase(
+        workspace=f"{REAL_WORKSPACE}{tag}",
+        cluster=f"{REAL_CLUSTER}{tag}",
+        agent_token=f"{REAL_AGENT_TOKEN}{tag}",
+        viewer=(f"real-viewer{tag}", f"viewer{tag}@synthetic.invalid"),
+        outsider=(f"real-outsider{tag}", f"outsider{tag}@synthetic.invalid"),
+    )
+
+
+def reset_real_gateway(db: Any, case: RealCase) -> None:
+    """Remove only this case's rows so a restart never accumulates or touches other cases."""
+    with db.connection() as conn:
+        for table in SYNTHETIC_TABLES:
+            conn.execute(
+                text(f"delete from {table} where workspace_id = :w"),  # noqa: S608
+                {"w": case.workspace},
+            )
+
+
+def seed_real_gateway(db: Any, case: RealCase | None = None) -> RealCase:
+    from domains.identity.dependencies import hash_agent_token
+    from packages.contracts.identity import AccessResourceType
+
+    case = case or real_case()
+    passwords = __import__("passwords")
+    db.register_target_cluster(
+        {
+            "user_id": f"owner-{case.workspace}",
+            "workspace_id": case.workspace,
+            "organization_id": case.workspace,
+            "cluster_id": case.cluster,
+            "agent_token_hash": hash_agent_token(case.agent_token),
+        }
+    )
+    for user_id, email in (case.viewer, case.outsider):
+        db.create_user(
+            user_id, email, passwords.hash_password(REAL_PASSWORD), user_id, "active", "user"
+        )
+    db.grant_resource_access(
+        {
+            "user_id": case.viewer[0],
+            "organization_id": case.workspace,
+            "resource_type": AccessResourceType.CLUSTER.value,
+            "resource_id": case.cluster,
+            "role": "observer",
+        }
+    )
+    return case
+
+
+def serve_real_gateway(port: int, *, reset: bool = True) -> None:
+    """``reset=False`` keeps the case's rows, which is how a process restart is verified."""
+    import uvicorn
+
+    from domains.registry import Database
+    from packages.events.in_memory import InMemoryEventBus
+
+    os.environ["DATABASE_URL"] = DB_URL
+    os.environ["REDIS_URL"] = os.environ["INCIDENT_HISTORY_TEST_REDIS_URL"]
+    Database().init()
+    gateway = __import__("gateway")
+    app = gateway.create_app(event_bus=InMemoryEventBus())
+    case = real_case()
+    if reset:
+        reset_real_gateway(app.state.db, case)
+    seed_real_gateway(app.state.db, case)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+
+# --- 기존 agent evidence 재사용 연결: record_evidence_event_once ----------------------
+
+
+def _kubernetes_payload(
+    at: datetime, uid: str, *, pods: bool = True, events: list | None = None
+) -> dict:
+    body: dict = {
+        "cluster": {"cluster_id": "c", "collected_at": at.isoformat()},
+        "collection_scopes": [{"namespace": "default", "label_selector": None}],
+        "pods": (
+            [
+                {
+                    "uid": uid,
+                    "name": "api-0",
+                    "namespace": "default",
+                    "resource_version": uid,
+                    "phase": "Running",
+                    "restart_total": 0,
+                }
+            ]
+            if pods
+            else []
+        ),
+    }
+    if events is not None:
+        body["event_capture"] = {
+            "complete": True,
+            "truncated": False,
+            "reason": "complete",
+            "freshness": {"observed_at": at.isoformat(), "max_age_seconds": 600},
+            "coverage": {
+                "scope": "all_namespaces",
+                "pagination": "continue",
+                "gap": False,
+                "event_count": len(events),
+            },
+            "events": events,
+        }
+    return body
+
+
+def _scoped_key(scope: tuple[str, str], key: str) -> str:
+    """Agents scope evidence keys by workspace and cluster; the table key is global."""
+    return f"{scope[0]}:{scope[1]}:{key}"
+
+
+def _ingest(db: Any, scope: tuple[str, str], key: str, kubernetes: dict, **extra: Any) -> dict:
+    from domains.rca.history_ingest import evidence_inventory_payload
+    from packages.events.envelope import event
+
+    key = _scoped_key(scope, key)
+
+    envelope = event(
+        "evidence.built", "api-gateway", {"k": key}, f"corr-{key}", workspace_id=scope[0]
+    )
+    return db.record_evidence_event_once(
+        evidence_key=key,
+        workspace_id=scope[0],
+        cluster_id=scope[1],
+        source_id="agent",
+        window_start=key,
+        agent_id="agent-1",
+        event_envelope=envelope,
+        payload={"k": key},
+        inventory_payload=evidence_inventory_payload(kubernetes),
+        **extra,
+    )
+
+
+def _ledger_rows(db: Any, workspace_id: str) -> list[tuple[str, str, str | None]]:
+    with db.connection() as conn:
+        rows = conn.execute(
+            text(
+                "select source, event_type, resource->>'uid' as uid "
+                "from timeline_events where workspace_id = :w order by sequence"
+            ),
+            {"w": workspace_id},
+        ).all()
+    return [(row.source, row.event_type, row.uid) for row in rows]
+
+
+def test_evidence_ingest_records_uid_change_as_an_update(db: Any, scope: tuple[str, str]) -> None:
+    _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-old"))
+    assert _ledger_rows(db, scope[0]) == []  # the first scoped cut proves no addition
+
+    _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
+
+    assert _ledger_rows(db, scope[0]) == [("inventory", "update", "uid-new")]
+    assert _snapshot_count(db, scope[0]) == 2
+
+
+def test_resent_evidence_adds_no_snapshot_or_ledger_fact(db: Any, scope: tuple[str, str]) -> None:
+    _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-old"))
+    _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
+
+    again = _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
+
+    assert again["duplicate"] is True
+    assert _snapshot_count(db, scope[0]) == 2
+    assert _ledger_rows(db, scope[0]) == [("inventory", "update", "uid-new")]
+
+
+def test_scoped_evidence_never_deletes_what_it_does_not_list(
+    db: Any, scope: tuple[str, str]
+) -> None:
+    _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-1"))
+
+    _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-1", pods=False))
+
+    assert _ledger_rows(db, scope[0]) == []
+    assert (
+        _count(
+            db,
+            "select count(*) from cluster_inventory_resources "
+            "where workspace_id = :w and deleted_at is not null",
+            w=scope[0],
+        )
+        == 0
+    )
+
+
+def test_complete_event_capture_becomes_ledger_facts_once(db: Any, scope: tuple[str, str]) -> None:
+    fact = {
+        "uid": "evt-1",
+        "api_version": "v1",
+        "namespace": "default",
+        "name": "api-0.1",
+        "type": "Warning",
+        "count": 3,
+        "last_occurrence_at": BASE.isoformat(),
+    }
+    _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-1", events=[fact]))
+    _ingest(
+        db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=1), "uid-1", events=[fact])
+    )
+
+    kinds = [row for row in _ledger_rows(db, scope[0]) if row[0] == "kubernetes_event"]
+    assert kinds == [("kubernetes_event", "k8s_event", "evt-1")]
+
+
+def test_failure_after_the_snapshot_rolls_back_window_snapshot_and_ledger(
+    db: Any, scope: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ingest(db, scope, "e-1", _kubernetes_payload(BASE, "uid-old"))
+    real_append = db.append_timeline_events
+
+    def append_then_fail(events: Any) -> Any:
+        real_append(events)
+        raise RuntimeError("failure after the ledger insert")
+
+    monkeypatch.setattr(db, "append_timeline_events", append_then_fail)
+    with pytest.raises(RuntimeError, match="after the ledger insert"):
+        _ingest(db, scope, "e-2", _kubernetes_payload(BASE + timedelta(minutes=5), "uid-new"))
+
+    assert _snapshot_count(db, scope[0]) == 1
+    assert _ledger_rows(db, scope[0]) == []
+    assert _evidence_rows(db, _scoped_key(scope, "e-2")) == (0, 0)
+
+
+# --- 실제 게이트웨이: 공개 HTTP agent ingest -> DB -> history ---------------------------
+
+REDIS_URL = os.environ.get("INCIDENT_HISTORY_TEST_REDIS_URL", "")
+
+
+@pytest.mark.skipif(not REDIS_URL, reason="INCIDENT_HISTORY_TEST_REDIS_URL 미설정")
+def test_public_http_agent_ingest_to_history_with_real_auth(
+    db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from packages.events.in_memory import InMemoryEventBus
+
+    sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src/services/gateway/api-gateway")]
+    monkeypatch.setenv("REDIS_URL", REDIS_URL)
+    gateway = __import__("gateway")
+    suffix = uuid.uuid4().hex[:8]
+    case = seed_real_gateway(db, real_case(suffix))
+    correlation = f"http-{suffix}"
+    agent = {"x-agent-token": case.agent_token}
+    now = datetime.now(UTC)
+
+    def evidence(key: str, at: datetime, uid: str) -> dict:
+        return {
+            "correlation_id": correlation,
+            "evidence_key": f"{key}-{suffix}",
+            "source_id": "agent",
+            "window_start": at.isoformat(),
+            "kubernetes": _kubernetes_payload(at, uid),
+        }
+
+    def login(client: TestClient, user: tuple[str, str]) -> None:
+        response = client.post("/auth/login", json={"email": user[1], "password": REAL_PASSWORD})
+        assert response.status_code == 200
+
+    first = evidence("h-1", now - timedelta(minutes=8), "uid-old")
+    second = evidence("h-2", now - timedelta(minutes=3), "uid-new")
+    with TestClient(gateway.create_app(event_bus=InMemoryEventBus()), base_url="https://t") as app:
+        assert app.post("/agent/evidence", json=first, headers=agent).status_code == 200
+        assert app.post("/agent/evidence", json=second, headers=agent).status_code == 200
+        assert app.post("/agent/evidence", json=second, headers=agent).status_code == 200
+        assert (
+            app.post("/agent/evidence", json=second, headers={"x-agent-token": "bad"}).status_code
+            == 401
+        )
+        db.save_rca_report(
+            correlation,
+            case.workspace,
+            "synthetic",
+            "none",
+            {
+                "incident": {
+                    "incident_id": f"inc-{suffix}",
+                    "cluster_id": case.cluster,
+                    "first_seen_at": (now - timedelta(minutes=2)).isoformat(),
+                    "symptom": "synthetic",
+                    "severity": "warning",
+                }
+            },
+        )
+        login(app, case.viewer)
+        viewer_cookie = app.cookies.get("service_session")
+        body = app.get(f"/incidents/{correlation}/history").json()
+        assert body["completeness"]["status"] == "partial"
+        assert "partial_scope" in body["completeness"]["reasons"]
+        assert [(e["event_type"], e["resource"]["uid"]) for e in body["events"]] == [
+            ("update", "uid-new")
+        ]
+        assert {item["evidence_key"] for item in body["evidence"]} == {
+            f"{case.workspace}:{case.cluster}:h-1-{suffix}",
+            f"{case.workspace}:{case.cluster}:h-2-{suffix}",
+        }
+        app.cookies.clear()
+        assert app.get(f"/incidents/{correlation}/history").status_code == 401
+        login(app, case.outsider)
+        assert app.get(f"/incidents/{correlation}/history").status_code == 404
+
+    # 프로세스 재시작: 새 게이트웨이 인스턴스가 같은 DB와 Redis 세션을 이어받는다.
+    with TestClient(gateway.create_app(event_bus=InMemoryEventBus()), base_url="https://t") as app:
+        # A real agent sends no session cookie; the browser session is attached afterwards.
+        assert app.post("/agent/evidence", json=second, headers=agent).status_code == 200
+        app.cookies.set("service_session", viewer_cookie)
+        restarted = app.get(f"/incidents/{correlation}/history").json()
+    assert restarted["events"] == body["events"]
+    assert len(restarted["evidence"]) == 2
+
+
+def load_real_sample(base_url: str = "http://127.0.0.1:18766") -> str:
+    """Send a synthetic incident through the public agent route; returns its correlation id.
+
+    Only the RCA report is written directly, because its producer (the incident worker) is
+    not part of this gateway process.  Everything else goes through real HTTP and auth.
+    """
+    import json
+    import urllib.request
+
+    os.environ["DATABASE_URL"] = DB_URL
+    from domains.registry import Database
+
+    case = real_case()
+    correlation = "real-incident-1"
+    now = datetime.now(UTC)
+
+    def post(key: str, minutes_ago: int, uid: str, events: list) -> None:
+        at = (now - timedelta(minutes=minutes_ago)).isoformat()
+        kubernetes = _kubernetes_payload(
+            at=now - timedelta(minutes=minutes_ago), uid=uid, events=events
+        )
+        body = {
+            "correlation_id": correlation,
+            "evidence_key": key,
+            "source_id": "synthetic-agent",
+            "window_start": at,
+            "kubernetes": kubernetes,
+        }
+        request = urllib.request.Request(
+            f"{base_url}/agent/evidence",
+            data=json.dumps(body).encode(),
+            headers={"content-type": "application/json", "x-agent-token": case.agent_token},
+        )
+        urllib.request.urlopen(request).read()  # noqa: S310 - fixed loopback URL
+
+    fact = {
+        "uid": "evt-real-1",
+        "api_version": "v1",
+        "namespace": "default",
+        "name": "api-0.crashloop",
+        "type": "Warning",
+        "count": 4,
+        "last_occurrence_at": (now - timedelta(minutes=6)).isoformat(),
+    }
+    post("sample-1", 12, "uid-api-old", [fact])
+    post("sample-2", 6, "uid-api-new", [fact])
+    Database().save_rca_report(
+        correlation,
+        case.workspace,
+        "synthetic_root_cause",
+        "none",
+        {
+            "incident": {
+                "incident_id": "inc-real-1",
+                "cluster_id": case.cluster,
+                "first_seen_at": (now - timedelta(minutes=5)).isoformat(),
+                "resource_kind": "Pod",
+                "resource_name": "api-0",
+                "namespace": "default",
+                "symptom": "CrashLoopBackOff",
+                "severity": "warning",
+            }
+        },
+    )
+    return correlation

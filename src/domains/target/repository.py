@@ -1173,13 +1173,15 @@ class TargetAgentRepository(DatabaseConnection):
         event_envelope: EventEnvelope,
         payload: JsonObject,
         timeline_events: Sequence[TimelineEvent] = (),
+        inventory_payload: JsonObject | None = None,
     ) -> JsonObject:
         """Record one evidence window once, with its Timeline facts in the same transaction.
 
-        ``timeline_events`` is optional so existing callers keep their behaviour.  When
-        given, the ledger append joins this unit of work: either the window, outbox
-        event and ledger facts all commit, or none does.  A re-received key returns
-        before any append, so a repeat can never add a second ledger fact.
+        ``timeline_events`` and ``inventory_payload`` are optional so existing callers keep
+        their behaviour.  When given, the snapshot write and the ledger append join this
+        unit of work: either the window, outbox event, snapshot and ledger facts all
+        commit, or none does.  A re-received key returns before any write, so a repeat can
+        never add a second snapshot or ledger fact.
         """
         window_table = EvidenceWindow.__table__
         event_table = EventModel.__table__
@@ -1237,7 +1239,35 @@ class TargetAgentRepository(DatabaseConnection):
             )
             if timeline_events:
                 self._append_timeline_events_in_transaction(timeline_events)
+            if inventory_payload is not None:
+                self._record_inventory_in_transaction(
+                    workspace_id=workspace_id,
+                    cluster_id=cluster_id,
+                    agent_id=agent_id,
+                    payload=inventory_payload,
+                )
         return {"duplicate": False, **dict(inserted)}
+
+    def _record_inventory_in_transaction(
+        self,
+        *,
+        workspace_id: str,
+        cluster_id: str,
+        agent_id: str | None,
+        payload: JsonObject,
+    ) -> None:
+        # Inventory and ledger repositories are composed into Database beside this one.
+        save = getattr(self, "save_inventory_snapshot_with_timeline", None)
+        append = getattr(self, "append_timeline_events", None)
+        if not callable(save) or not callable(append):
+            raise TypeError("inventory and timeline ledger are not composed into this repository")
+        save(
+            workspace_id=workspace_id,
+            cluster_id=cluster_id,
+            agent_id=agent_id or "cluster-agent",
+            payload=payload,
+            append_timeline_events=append,
+        )
 
     def _append_timeline_events_in_transaction(self, events: Sequence[TimelineEvent]) -> None:
         # The ledger repository is composed into Database beside this one; it joins the

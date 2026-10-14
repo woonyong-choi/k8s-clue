@@ -474,10 +474,34 @@ def inventory_timeline_events(
     """Derive durable inventory and Kubernetes Event facts from one collection cut.
 
     An incomplete collection may be missing arbitrary namespaces or resource kinds, so it
-    cannot truthfully establish inventory additions or deletions. Kubernetes Event facts
+    cannot truthfully establish inventory additions or deletions, only updates of resources
+    present in both cuts. Kubernetes Event facts
     use a separate complete-capture proof because Event absence never means deletion.
     """
     inventory_events: tuple[TimelineEvent, ...] = ()
+    if not resources_complete:
+        # A scoped cut proves no addition or deletion, but a resource present in both the
+        # previous row and this cut did change, including a new UID under the same key.
+        previous_by_key = {
+            str(row["inventory_key"]): row
+            for row in previous_rows
+            if is_timeline_inventory_resource(row)
+        }
+        inventory_events = tuple(
+            inventory_change_timeline_event(
+                workspace_id=workspace_id,
+                cluster_id=cluster_id,
+                observed_at=observed_at,
+                event_type="update",
+                resource=row,
+            )
+            for row in sorted(
+                (row for row in current_rows if is_timeline_inventory_resource(row)),
+                key=lambda item: str(item["inventory_key"]),
+            )
+            if str(row["inventory_key"]) in previous_by_key
+            and inventory_resource_changed(previous_by_key[str(row["inventory_key"])], row)
+        )
     if resources_complete:
         previous_by_key = {
             str(row["inventory_key"]): row
@@ -1082,7 +1106,6 @@ class InventoryRepository(DatabaseConnection):
                 table.c.workspace_id == workspace_id,
                 table.c.cluster_id == cluster_id,
                 table.c.status != "ignored_stale",
-                live_inventory_snapshot_clause(table),
                 table.c.collected_at >= lower,
                 table.c.collected_at < upper,
             )

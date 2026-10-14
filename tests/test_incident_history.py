@@ -26,6 +26,7 @@ from domains.rca.history import (
     observation_from_snapshot_row,
     project_resources,
 )
+from domains.rca.history_ingest import evidence_inventory_payload
 from domains.timeline.mapping import inventory_timeline_event
 from packages.contracts.identity import Permission
 from packages.contracts.parity import ClusterScope
@@ -151,13 +152,11 @@ def test_uid_less_inventory_stays_a_locator_and_is_not_promoted() -> None:
     assert resources[0].lifecycle == "present"
 
 
-def test_resource_seen_only_through_kubernetes_events_is_unobserved() -> None:
+def test_kubernetes_event_objects_are_not_listed_as_resources() -> None:
+    # The Event fact names the Event object itself, never the involved resource.
     event = _event("add", 2, uid="uid-1").model_copy(update={"source": "kubernetes_event"})
 
-    resources = project_resources([event], coverage=())
-
-    assert [item.lifecycle for item in resources] == ["unobserved"]
-    assert resources[0].deleted_at is None
+    assert project_resources([event], coverage=()) == ()
 
 
 def test_deletion_overlapping_a_gap_is_gap_bounded() -> None:
@@ -628,3 +627,81 @@ def test_ledger_failure_propagates_out_of_the_unit_of_work() -> None:
         )
 
     assert recorder.depth == 0
+
+
+# --- agent evidence 재사용 어댑터 ------------------------------------------------
+
+
+def _kubernetes(**overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "cluster": {"cluster_id": CLUSTER, "collected_at": BASE.isoformat()},
+        "collection_scopes": [{"namespace": "default", "label_selector": None}],
+        "pods": [
+            {
+                "uid": "uid-1",
+                "name": "api-0",
+                "namespace": "default",
+                "resource_version": "7",
+                "phase": "Running",
+                "restart_total": 2,
+                "node_name": "node-a",
+            }
+        ],
+        "workloads": [],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_adapter_marks_the_scoped_cut_as_incomplete_and_not_live() -> None:
+    payload = evidence_inventory_payload(_kubernetes())
+
+    assert payload is not None
+    assert payload["replace"] is False
+    assert payload["summary"]["live_inventory"] is False
+    assert payload["summary"]["resources_complete"] is False
+    assert "collection_coverage" not in payload["summary"]
+
+
+def test_adapter_never_stamps_a_missing_collection_time() -> None:
+    assert evidence_inventory_payload(_kubernetes(cluster={"cluster_id": CLUSTER})) is None
+    assert evidence_inventory_payload({"pods": []}) is None
+    assert evidence_inventory_payload("not-a-mapping") is None
+
+
+def test_adapter_skips_rows_without_a_uid_and_keeps_summaries_small() -> None:
+    pods = [
+        {"uid": "", "name": "ghost", "namespace": "default", "phase": "Running"},
+        {"name": "no-uid", "namespace": "default"},
+        {
+            "uid": "uid-2",
+            "name": "api-1",
+            "namespace": "default",
+            "phase": "Failed",
+            "node_name": "n",
+        },
+    ]
+
+    payload = evidence_inventory_payload(_kubernetes(pods=pods))
+
+    assert payload is not None
+    assert [item["uid"] for item in payload["resources"]] == ["uid-2"]
+    assert payload["resources"][0]["summary"] == {"phase": "Failed"}
+
+
+def test_adapter_splits_event_capture_into_proof_and_facts() -> None:
+    capture = {
+        "complete": True,
+        "truncated": False,
+        "reason": "complete",
+        "freshness": {"observed_at": BASE.isoformat(), "max_age_seconds": 600},
+        "coverage": {"scope": "all_namespaces", "pagination": "continue", "event_count": 1},
+        "events": [{"uid": "evt-1", "name": "e", "count": 1}],
+    }
+
+    payload = evidence_inventory_payload(_kubernetes(event_capture=capture))
+
+    assert payload is not None
+    summary = payload["summary"]
+    assert "events" not in summary["kubernetes_event_capture"]
+    assert summary["kubernetes_event_facts"] == [{"uid": "evt-1", "name": "e", "count": 1}]
