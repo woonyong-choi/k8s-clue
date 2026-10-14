@@ -2075,13 +2075,19 @@ def pod_collection_coverage(
         reasons.add(COVERAGE_REASON_LABEL_SELECTOR)
     complete = observed and not truncated and not reasons
     return _pod_coverage_entry(
-        namespace, label_selector, observed, complete, truncated, sorted(reasons)
+        namespace,
+        label_selector,
+        observed=observed,
+        complete=complete,
+        truncated=truncated,
+        reasons=sorted(reasons),
     )
 
 
 def _pod_coverage_entry(
     namespace: str,
     label_selector: str | None,
+    *,
     observed: bool,
     complete: bool,
     truncated: bool,

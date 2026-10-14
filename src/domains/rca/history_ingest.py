@@ -35,6 +35,7 @@ WORKLOAD_SUMMARY_FIELDS = (
 )
 EVIDENCE_SNAPSHOT_SOURCE = "agent-evidence"
 INVALID_PROOF_REASON = "invalid_proof"
+PROOF_FLAGS = ("observed", "complete", "delete_safe", "truncated")
 
 
 def evidence_inventory_payload(kubernetes: object) -> JsonObject | None:
@@ -116,9 +117,6 @@ def _pod_coverage(kubernetes: Mapping[str, Any]) -> list[JsonObject]:
             continue
         entries.append(_proof_entry(entry, namespace))
     return entries
-
-
-PROOF_FLAGS = ("observed", "complete", "delete_safe", "truncated")
 
 
 def _proof_entry(entry: Mapping[str, Any], namespace: str) -> JsonObject:
