@@ -24,6 +24,7 @@ from domains.rca.events import (
     RecoveryVerificationStartedBody,
     RecoveryVerificationUpdatedBody,
 )
+from domains.rca.image_pull_tracking import track_image_pull_evidence
 from domains.rca.recovery_verification import (
     DEFAULT_MAXIMUM_SECONDS,
     DEFAULT_MINIMUM_SECONDS,
@@ -47,6 +48,7 @@ from packages.contracts.event_bus.bodies import EventBody, JsonObject
 from packages.contracts.event_bus.bodies.platform import PipelineContractFailedBody
 from packages.contracts.stores import RecoveryPlanStore
 from packages.runtime.app import App, EventContext
+from packages.runtime.dispatch import CorrelatedResult
 from services.ai.agent.defaults import ActionRoutes
 from services.ai.agent.recovery.engine import RecoveryPlanner
 
@@ -729,7 +731,7 @@ def apply_verification_terminal_state(
 async def on_recovery_verification_evidence(
     evt: ClusterEvidenceReceivedBody,
     ctx: EventContext[RecoveryPlanStore],
-) -> AsyncIterator[EventBody]:
+) -> AsyncIterator[EventBody | CorrelatedResult]:
     if not evt.evidence_key:
         return
     evidence = await ctx.db.get_evidence_window_payload_for_workspace(
@@ -738,11 +740,18 @@ async def on_recovery_verification_evidence(
     )
     if not isinstance(evidence, dict):
         return
+    for result in await track_image_pull_evidence(evt, evidence, ctx):
+        yield result
     records = await ctx.db.list_recovery_verification_plans(
         evt.workspace_id,
         evt.cluster_id,
         limit=100,
     )
+    records = [
+        record
+        for record in records
+        if mapping(record.get("payload")).get("root_cause") != "wrong_image_tag"
+    ]
     if not records:
         return
     now = normalized_utc(await ctx.db.current_database_time())

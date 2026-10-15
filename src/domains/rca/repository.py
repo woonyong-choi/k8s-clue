@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -14,8 +15,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from domains.dashboard.models import RcaTimeline
 from domains.rca.events import RecoveryVerificationFailedBody
+from domains.rca.history import OBSERVATION_MAX_GAP_MS
 from domains.rca.models import (
     Evidence,
+    ImagePullObservation,
     IncidentSignalClaim,
     RcaBacklogItem,
     RcaReport,
@@ -587,6 +590,145 @@ class RcaRepository(DatabaseConnection):
         with self.connection() as conn:
             row = conn.execute(statement).mappings().first()
         return dict(row) if row else None
+
+    # cost: time O(p), heap O(p), stack O(1), io 1
+    # vars: p = 최대 100개 활성 복구 계획
+    # basis: estimate
+    def list_image_pull_tracking_plans(
+        self, workspace_id: str, cluster_id: str, *, limit: int = 100
+    ) -> list[JsonObject]:
+        table = RecoveryPlanRecord.__table__
+        statement = (
+            select(
+                table.c.plan_id,
+                table.c.workspace_id,
+                table.c.correlation_id,
+                table.c.incident_id,
+                table.c.status,
+                table.c.payload,
+            )
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.status.in_(
+                    (RECOVERY_PLAN_STATUS_DEPLOY_PENDING, RECOVERY_PLAN_STATUS_VERIFICATION_PENDING)
+                ),
+                table.c.payload["target"]["cluster_id"].astext == cluster_id,
+            )
+            .order_by(table.c.updated_at.asc(), table.c.id.asc())
+            .limit(max(1, min(limit, 100)))
+        )
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute(statement).mappings()]
+
+    # cost: time O(log n), heap O(1), stack O(1), io 1
+    # vars: n = 한 사건의 이미지 증거 창 수
+    # basis: estimate
+    def record_image_pull_observation(self, payload: JsonObject) -> JsonObject:
+        table = ImagePullObservation.__table__
+        values = {
+            "workspace_id": str(payload["workspace_id"]),
+            "correlation_id": str(payload["correlation_id"]),
+            "binding_id": str(payload["binding_id"]),
+            "expected_sha": str(payload["expected_sha"]),
+            "expected_image": str(payload["expected_image"]),
+            "evidence_key": str(payload["evidence_key"]),
+            "status": str(payload["status"]),
+            "reason": str(payload["reason"]),
+            "deployment_uid": payload.get("deployment_uid"),
+            "replicaset_uid": payload.get("replicaset_uid"),
+            "ready_pod_count": int(payload.get("ready_pod_count") or 0),
+            "observed_at": payload["observed_at"],
+        }
+        identity = "\0".join(
+            str(values[key])
+            for key in ("workspace_id", "correlation_id", "binding_id", "expected_sha")
+        )
+        lock_key = int.from_bytes(
+            hashlib.sha256(f"image-pull\0{identity}".encode()).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        with self.connection() as conn:
+            conn.execute(select(func.pg_advisory_xact_lock(lock_key)))
+            existing = (
+                conn.execute(
+                    select(table).where(
+                        table.c.workspace_id == values["workspace_id"],
+                        table.c.correlation_id == values["correlation_id"],
+                        table.c.binding_id == values["binding_id"],
+                        table.c.expected_sha == values["expected_sha"],
+                        table.c.evidence_key == values["evidence_key"],
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if existing is not None:
+                return dict(existing)
+            previous = (
+                conn.execute(
+                    select(table)
+                    .where(
+                        table.c.workspace_id == values["workspace_id"],
+                        table.c.correlation_id == values["correlation_id"],
+                        table.c.binding_id == values["binding_id"],
+                        table.c.expected_sha == values["expected_sha"],
+                    )
+                    .order_by(table.c.observed_at.desc(), table.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            is_late = previous is not None and values["observed_at"] <= previous["observed_at"]
+            gap_ms = (
+                (values["observed_at"] - previous["observed_at"]).total_seconds() * 1000
+                if previous is not None
+                else None
+            )
+            follows_healthy = (
+                previous is not None
+                and previous["status"] == "healthy"
+                and previous["expected_image"] == values["expected_image"]
+                and previous["deployment_uid"] == values["deployment_uid"]
+                and previous["replicaset_uid"] == values["replicaset_uid"]
+                and gap_ms is not None
+                and 0 < gap_ms <= OBSERVATION_MAX_GAP_MS
+            )
+            if is_late:
+                values["status"] = "unknown"
+                values["reason"] = "late_evidence_window"
+            consecutive = (
+                int(previous["consecutive_healthy_windows"]) + 1
+                if values["status"] == "healthy" and follows_healthy
+                else 1
+                if values["status"] == "healthy"
+                else 0
+            )
+            values["consecutive_healthy_windows"] = consecutive
+            values["confirmed_recovered"] = consecutive >= 2
+            row = conn.execute(pg_insert(table).values(**values).returning(table)).mappings().one()
+        return dict(row)
+
+    # cost: time O(log n + i), heap O(i), stack O(1), io 1
+    # vars: n = 이미지 증거 전체 행 수, i = 제한된 반환 행 수
+    # basis: estimate
+    def list_image_pull_observations(
+        self, workspace_id: str, correlation_id: str, binding_id: str, *, limit: int = 100
+    ) -> list[JsonObject]:
+        table = ImagePullObservation.__table__
+        statement = (
+            select(table)
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.correlation_id == correlation_id,
+                table.c.binding_id == binding_id,
+            )
+            .order_by(table.c.observed_at.desc(), table.c.id.desc())
+            .limit(max(1, min(limit, 100)))
+        )
+        with self.connection() as conn:
+            return [dict(row) for row in conn.execute(statement).mappings()]
 
     def select_recovery_plan_action_if_open(
         self,

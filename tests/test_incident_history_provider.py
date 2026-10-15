@@ -279,6 +279,24 @@ def test_an_unlimited_snapshot_keeps_its_proof_after_build_response(module: Any)
     assert entries(snapshot)["default"]["complete"] is True
 
 
+def test_pod_summary_keeps_declared_image_when_runtime_image_is_normalized(module: Any) -> None:
+    raw_pod = pod("game-0", uid="pod-1")
+    raw_pod["spec"]["containers"] = [{"name": "game", "image": "busybox:1.37.0"}]
+    raw_pod["status"]["containerStatuses"] = [
+        {
+            "name": "game",
+            "image": "docker.io/library/busybox:1.37.0",
+            "ready": True,
+            "state": {"running": {"startedAt": COLLECTED_AT}},
+        }
+    ]
+
+    summarized = module.pod_summary(raw_pod)
+
+    assert summarized["containers"][0]["declared_image"] == "busybox:1.37.0"
+    assert summarized["containers"][0]["image"] == "docker.io/library/busybox:1.37.0"
+
+
 def test_an_unavailable_query_is_not_observed(module: Any) -> None:
     provider = module.KubernetesSnapshotProvider(cluster_id="cluster-1")
     query = module.KubernetesSnapshotQuery(query_name="ns", description="d", namespace="default")

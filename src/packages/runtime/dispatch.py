@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from packages.config.errors import fail
+from packages.contracts.event_bus.bodies.base import EventBody
 from packages.contracts.event_bus.interfaces import EventEnvelope
 from packages.contracts.event_bus.registry import Subscription
 from packages.contracts.event_bus.subscriptions import ALL_EVENTS_SUBJECT
@@ -47,6 +48,12 @@ class EventContext[DbT]:
         )
 
 
+@dataclass(frozen=True)
+class CorrelatedResult:
+    body: EventBody
+    correlation_id: str
+
+
 async def _iter_results(result: Any) -> AsyncIterator[Any]:
     """핸들러 결과를 body 스트림으로 통일: yield형 / list / 단건 / None."""
     if inspect.isasyncgen(result):
@@ -66,13 +73,19 @@ async def _iter_results(result: Any) -> AsyncIterator[Any]:
 async def _collect(source: str, evt: EventEnvelope, result: Any) -> list[EventEnvelope]:
     """yield 된 body 를 발행할 EventEnvelope 로 수집(causation=부모 event_id)."""
     out: list[EventEnvelope] = []
-    async for body in _iter_results(result):
+    async for item in _iter_results(result):
+        body = item.body if isinstance(item, CorrelatedResult) else item
+        correlation_id = (
+            item.correlation_id if isinstance(item, CorrelatedResult) else evt.correlation_id
+        )
+        if not correlation_id:
+            raise ValueError("event correlation id is required")
         out.append(
             event(
                 body.__subject__,
                 source,
                 body.to_body(),
-                evt.correlation_id,
+                correlation_id,
                 evt.event_id,
                 workspace_id=evt.workspace_id,
             )
