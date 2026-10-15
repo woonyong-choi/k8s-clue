@@ -5,25 +5,14 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
-# 모든 도메인·인프라 모델을 import 하여 Base.metadata 에 테이블 등록
-import domains.ai.models  # noqa: F401
-import domains.catalog.models  # noqa: F401
-import domains.shell_state.models  # noqa: F401
 from sqlalchemy import engine_from_config, pool
 
-import domains.audit.models  # noqa: F401
-import domains.command.models  # noqa: F401
-import domains.dashboard.models  # noqa: F401
-import domains.gitops.models  # noqa: F401
-import domains.identity.models  # noqa: F401
-import domains.inventory.models  # noqa: F401
-import domains.rca.models  # noqa: F401
-import domains.scm.models  # noqa: F401
-import domains.target.models  # noqa: F401
-import domains.timeline.models  # noqa: F401
 import packages.storage.schema  # noqa: F401
 from alembic import context
+from domains.registry import load_domain_tables
 from packages.storage.base import Base
+
+load_domain_tables()
 
 config = context.config
 

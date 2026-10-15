@@ -94,7 +94,9 @@ _RECOMMENDED_MANIFEST_FILENAMES = (
 )
 
 
-def _manifest_candidate_rank(candidate: RepositoryManifestCandidate) -> tuple[int, int, int, int, str]:
+def _manifest_candidate_rank(
+    candidate: RepositoryManifestCandidate,
+) -> tuple[int, int, int, int, str]:
     """작을수록 좋은(상위) 후보. 진입점·표준 경로·파일명·얕은 깊이를 선호한다."""
     path = candidate.path.lower()
     filename = path.rsplit("/", 1)[-1]
@@ -133,6 +135,8 @@ def rank_manifest_candidates(
         )
         for index, candidate in enumerate(ordered)
     ]
+
+
 MAX_RENDER_SOURCE_FILES = 500
 MAX_RENDER_SOURCE_BYTES = 5 * 1_048_576
 MAX_RENDER_ERROR_LENGTH = 2000
@@ -306,7 +310,9 @@ class GitHubRepositoryClient:
             raise RepositoryDiscoveryError(422, "selected manifest path is not a file")
         if str(data.get("type", "")) != "file":
             raise RepositoryDiscoveryError(422, "selected manifest path is not a file")
-        size = int(data.get("size") or 0)
+        size = data.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise _invalid_shape_error("content", "github content size was invalid")
         if size > MAX_MANIFEST_BYTES:
             raise RepositoryDiscoveryError(422, "selected manifest exceeds the scan size limit")
         encoding = str(data.get("encoding") or "")
@@ -314,11 +320,11 @@ class GitHubRepositoryClient:
         if encoding != "base64" or not isinstance(raw_content, str):
             raise _invalid_shape_error("content", "github content response was invalid")
         try:
-            decoded = base64.b64decode(raw_content, validate=False)
+            decoded = base64.b64decode("".join(raw_content.split()), validate=True)
         except (binascii.Error, ValueError) as exc:
             raise _invalid_shape_error("content", "github content response was invalid") from exc
-        if len(decoded) > MAX_MANIFEST_BYTES:
-            raise RepositoryDiscoveryError(422, "selected manifest exceeds the scan size limit")
+        if len(decoded) != size:
+            raise _invalid_shape_error("content", "github content size did not match")
         return decoded
 
     async def branch_sha(self, repo_ref: str, branch: str) -> str:
@@ -676,9 +682,7 @@ class RepositoryDiscoveryService:
             try:
                 text = content.decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise RepositoryDiscoveryError(
-                    422, "selected manifest is not valid utf-8"
-                ) from exc
+                raise RepositoryDiscoveryError(422, "selected manifest is not valid utf-8") from exc
             parse_source = source_type
         objects = flatten_manifest_objects(parse_manifest_documents(text, parse_source))
         return revision, objects, warnings

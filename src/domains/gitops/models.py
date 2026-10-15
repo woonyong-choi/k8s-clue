@@ -246,3 +246,29 @@ class RepoChange(Base):
     manifest_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     manifest: Mapped[dict[str, Any]] = jsonb_column()
     created_at: Mapped[Any] = created_at_column()
+
+
+class GitSourceObservation(Base):
+    __tablename__ = "git_source_observations"
+    __table_args__ = (
+        PrimaryKeyConstraint("workspace_id", "binding_id", "commit_sha", "manifest_path"),
+    )
+
+    workspace_id: Mapped[str] = text_column()
+    binding_id: Mapped[str] = text_column()
+    repository_id: Mapped[str] = text_column()
+    application_id: Mapped[str] = text_column()
+    cluster_id: Mapped[str] = text_column()
+    namespace: Mapped[str] = text_column()
+    deployment_name: Mapped[str] = text_column()
+    repo_ref: Mapped[str] = text_column()
+    commit_sha: Mapped[str] = text_column()
+    manifest_path: Mapped[str] = text_column()
+    source_type: Mapped[str] = text_column()
+    status: Mapped[str] = text_column()
+    image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    replicas: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_at: Mapped[Any] = created_at_column()
+    updated_at: Mapped[Any] = updated_at_column()

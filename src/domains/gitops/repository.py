@@ -18,6 +18,7 @@ from domains.gitops.models import (
     ApprovedResourceSnapshot,
     DeploymentBinding,
     GitRepository,
+    GitSourceObservation,
     GitWatchTarget,
     ManifestArtifact,
     RepoChange,
@@ -1324,6 +1325,7 @@ class RepoChangeRepository(DatabaseConnection):
         workspace_id: str | None = None,
         *,
         limit: int = 500,
+        binding_id: str | None = None,
     ) -> list[JsonObject]:
         """GitHub polling 대상 — DB에 등록된 앱/바인딩/watch target 기준.
 
@@ -1376,6 +1378,8 @@ class RepoChangeRepository(DatabaseConnection):
                 binding_table.c.binding_id,
                 binding_table.c.environment,
                 binding_table.c.cluster_id,
+                binding_table.c.namespace,
+                binding_table.c.app_name,
                 manifest_path,
                 source_type,
                 func.coalesce(
@@ -1432,6 +1436,8 @@ class RepoChangeRepository(DatabaseConnection):
         )
         if workspace_id is not None:
             statement = statement.where(binding_table.c.workspace_id == workspace_id)
+        if binding_id is not None:
+            statement = statement.where(binding_table.c.binding_id == binding_id)
         with self.connection() as conn:
             rows = conn.execute(statement).mappings().all()
         return [row_dict(row) for row in rows]
@@ -1717,9 +1723,7 @@ class RepoChangeRepository(DatabaseConnection):
             table.c.status == ApprovalStatus.REQUESTED.value,
         )
         if application_ids is not None:
-            statement = statement.where(
-                table.c.application_id.in_(tuple(sorted(application_ids)))
-            )
+            statement = statement.where(table.c.application_id.in_(tuple(sorted(application_ids))))
         with self.connection() as conn:
             return int(conn.execute(statement).scalar() or 0)
 
@@ -1737,9 +1741,7 @@ class RepoChangeRepository(DatabaseConnection):
             table.c.status.not_in(TERMINAL_WORKFLOW_STATUSES),
         )
         if application_ids is not None:
-            statement = statement.where(
-                table.c.application_id.in_(tuple(sorted(application_ids)))
-            )
+            statement = statement.where(table.c.application_id.in_(tuple(sorted(application_ids))))
         with self.connection() as conn:
             return int(conn.execute(statement).scalar() or 0)
 
@@ -2078,6 +2080,102 @@ class RepoChangeRepository(DatabaseConnection):
         )
         with self.connection() as conn:
             conn.execute(statement)
+
+    # cost: time O(log n), heap O(1), stack O(1), io 1
+    # vars: n = Git source 관측 행 수
+    # basis: estimate
+    def get_git_source_observation(
+        self,
+        workspace_id: str,
+        binding_id: str,
+        commit_sha: str,
+        manifest_path: str,
+    ) -> JsonObject | None:
+        table = GitSourceObservation.__table__
+        statement = select(table).where(
+            table.c.workspace_id == workspace_id,
+            table.c.binding_id == binding_id,
+            table.c.commit_sha == commit_sha,
+            table.c.manifest_path == manifest_path,
+        )
+        with self.connection() as conn:
+            row = conn.execute(statement).mappings().first()
+        return row_dict(row) if row is not None else None
+
+    # cost: time O(log n), heap O(1), stack O(1), io 1-2
+    # vars: n = Git source 관측 행 수
+    # basis: estimate
+    def record_git_source_observation(self, payload: JsonObject) -> JsonObject:
+        table = GitSourceObservation.__table__
+        insert = pg_insert(table).values(
+            workspace_id=str(payload["workspace_id"]),
+            binding_id=str(payload["binding_id"]),
+            repository_id=str(payload["repository_id"]),
+            application_id=str(payload["application_id"]),
+            cluster_id=str(payload["cluster_id"]),
+            namespace=str(payload["namespace"]),
+            deployment_name=str(payload["deployment_name"]),
+            repo_ref=str(payload["repo_ref"]),
+            commit_sha=str(payload["commit_sha"]),
+            manifest_path=str(payload["manifest_path"]),
+            source_type=str(payload["source_type"]),
+            status=str(payload["status"]),
+            image=payload.get("image"),
+            replicas=payload.get("replicas"),
+            source_sha256=payload.get("source_sha256"),
+            reason=payload.get("reason"),
+        )
+        statement = insert.on_conflict_do_update(
+            index_elements=[
+                table.c.workspace_id,
+                table.c.binding_id,
+                table.c.commit_sha,
+                table.c.manifest_path,
+            ],
+            set_={
+                "repository_id": insert.excluded.repository_id,
+                "application_id": insert.excluded.application_id,
+                "cluster_id": insert.excluded.cluster_id,
+                "namespace": insert.excluded.namespace,
+                "deployment_name": insert.excluded.deployment_name,
+                "repo_ref": insert.excluded.repo_ref,
+                "source_type": insert.excluded.source_type,
+                "status": insert.excluded.status,
+                "image": insert.excluded.image,
+                "replicas": insert.excluded.replicas,
+                "source_sha256": insert.excluded.source_sha256,
+                "reason": insert.excluded.reason,
+                "observed_at": case(
+                    (insert.excluded.status == "observed", func.now()),
+                    else_=table.c.observed_at,
+                ),
+                "updated_at": func.now(),
+            },
+            where=table.c.status != "observed",
+        ).returning(table)
+        with self.connection() as conn:
+            row = conn.execute(statement).mappings().first()
+            if row is None:
+                row = (
+                    conn.execute(
+                        select(table).where(
+                            table.c.workspace_id == payload["workspace_id"],
+                            table.c.binding_id == payload["binding_id"],
+                            table.c.commit_sha == payload["commit_sha"],
+                            table.c.manifest_path == payload["manifest_path"],
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+        saved = row_dict(row)
+        if (
+            payload["status"] == "observed"
+            and saved["status"] == "observed"
+            and saved["source_sha256"] != payload.get("source_sha256")
+        ):
+            raise ValueError("git source changed at the same commit")
+        return saved
 
     def record_manifest_artifact(self, payload: JsonObject) -> JsonObject:
         repository_id = derive_repository_id(payload)

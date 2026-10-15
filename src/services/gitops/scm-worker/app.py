@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 
 from github_provider import GithubScmProvider, request_base_branch, request_repo
 
+from domains.gitops.events import GitChangedBody, GitWebhookReceivedBody
+from domains.gitops.source_observation import observe_git_source
 from domains.providers.catalog import ProviderCategory, require_available_provider
 from domains.scm.events import (
     SafePrCreatedBody,
@@ -131,6 +133,13 @@ def created_base_branch(request: SafePrRequestedBody) -> str:
         return request_base_branch(request)
     except (RuntimeError, ValueError):
         return request.base_branch
+
+
+@app.on(GitWebhookReceivedBody)
+async def on_git_webhook_received(
+    evt: GitWebhookReceivedBody, ctx: EventContext[PullRequestStore]
+) -> GitChangedBody | None:
+    return await observe_git_source(evt, ctx)
 
 
 @app.on(SafePrReadyForCreationBody)
