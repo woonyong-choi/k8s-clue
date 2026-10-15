@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clue-incident-25
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clue-incident-25
+  template:
+    metadata:
+      labels:
+        app: clue-incident-25
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/woonyong-choi/clue-demo-nonexistent:v0.0.0-missing
+          command: ["sh", "-c", "sleep 3600"]
