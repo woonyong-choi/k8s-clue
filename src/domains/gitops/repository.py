@@ -7,7 +7,7 @@ from collections.abc import Collection, Mapping, Sequence
 from contextlib import nullcontext
 from typing import Any
 
-from sqlalchemy import and_, bindparam, case, func, or_, select
+from sqlalchemy import and_, bindparam, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from domains.command.models import AgentCommand
@@ -16,6 +16,7 @@ from domains.gitops.models import (
     Application,
     Approval,
     ApprovedResourceSnapshot,
+    ArgoApplicationObservation,
     DeploymentBinding,
     GitRepository,
     GitSourceObservation,
@@ -1380,6 +1381,7 @@ class RepoChangeRepository(DatabaseConnection):
                 binding_table.c.cluster_id,
                 binding_table.c.namespace,
                 binding_table.c.app_name,
+                binding_table.c.deploy_policy,
                 manifest_path,
                 source_type,
                 func.coalesce(
@@ -2102,6 +2104,125 @@ class RepoChangeRepository(DatabaseConnection):
             row = conn.execute(statement).mappings().first()
         return row_dict(row) if row is not None else None
 
+    def configure_argocd_binding(
+        self,
+        workspace_id: str,
+        binding_id: str,
+        project: str,
+        application: str,
+    ) -> JsonObject:
+        table = DeploymentBinding.__table__
+        with self.connection() as conn:
+            row = (
+                conn.execute(
+                    select(table)
+                    .where(table.c.workspace_id == workspace_id, table.c.binding_id == binding_id)
+                    .with_for_update()
+                )
+                .mappings()
+                .one()
+            )
+            policy = dict(row["deploy_policy"] or {})
+            policy["argocd"] = {"project": project, "application": application}
+            conn.execute(
+                update(table)
+                .where(table.c.workspace_id == workspace_id, table.c.binding_id == binding_id)
+                .values(deploy_policy=policy, updated_at=func.now())
+            )
+        return {"project": project, "application": application}
+
+    def record_argo_application_observation(self, payload: JsonObject) -> JsonObject:
+        table = ArgoApplicationObservation.__table__
+        values = dict(
+            workspace_id=str(payload["workspace_id"]),
+            binding_id=str(payload["binding_id"]),
+            correlation_id=str(payload["correlation_id"]),
+            expected_sha=str(payload["expected_sha"]),
+            application=str(payload["application"]),
+            project=str(payload["project"]),
+            fingerprint=str(payload["fingerprint"]),
+            status=str(payload["status"]),
+            reason=payload.get("reason"),
+            sync_revision=payload.get("sync_revision"),
+            operation_revision=payload.get("operation_revision"),
+            sync_status=payload.get("sync_status"),
+            operation_phase=payload.get("operation_phase"),
+            health_status=payload.get("health_status"),
+            condition_types=payload.get("condition_types"),
+            reconciled_at=payload.get("reconciled_at"),
+            first_checked_at=payload["checked_at"],
+            last_checked_at=payload["checked_at"],
+            request_count=int(payload.get("request_count") or 0),
+            response_bytes=int(payload.get("response_bytes") or 0),
+        )
+        lock_key = argo_observation_lock_key(
+            values["workspace_id"],
+            values["binding_id"],
+            values["correlation_id"],
+            values["expected_sha"],
+        )
+        with self.connection() as conn:
+            conn.execute(select(func.pg_advisory_xact_lock(lock_key)))
+            previous = (
+                conn.execute(
+                    select(table)
+                    .where(
+                        table.c.workspace_id == values["workspace_id"],
+                        table.c.binding_id == values["binding_id"],
+                        table.c.correlation_id == values["correlation_id"],
+                        table.c.expected_sha == values["expected_sha"],
+                    )
+                    .order_by(table.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if previous is not None and previous["fingerprint"] == values["fingerprint"]:
+                statement = (
+                    update(table)
+                    .where(table.c.id == previous["id"])
+                    .values(
+                        last_checked_at=func.greatest(
+                            table.c.last_checked_at, values["last_checked_at"]
+                        ),
+                        reconciled_at=func.greatest(table.c.reconciled_at, values["reconciled_at"]),
+                        request_count=table.c.request_count + values["request_count"],
+                        response_bytes=table.c.response_bytes + values["response_bytes"],
+                    )
+                    .returning(table)
+                )
+            else:
+                statement = pg_insert(table).values(**values).returning(table)
+            row = conn.execute(statement).mappings().one()
+        return row_dict(row)
+
+    # cost: time O(log n + k), heap O(k), stack O(1), io 1
+    # vars: n = Argo 관측 행 수, k = 제한된 반환 행 수
+    # basis: estimate
+    def list_argo_application_observations(
+        self,
+        workspace_id: str,
+        correlation_id: str,
+        binding_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[JsonObject]:
+        table = ArgoApplicationObservation.__table__
+        statement = (
+            select(table)
+            .where(
+                table.c.workspace_id == workspace_id,
+                table.c.correlation_id == correlation_id,
+                table.c.binding_id == binding_id,
+            )
+            .order_by(table.c.id.desc())
+            .limit(max(1, min(limit, 100)))
+        )
+        with self.connection() as conn:
+            rows = conn.execute(statement).mappings().all()
+        return [row_dict(row) for row in rows]
+
     # cost: time O(log n), heap O(1), stack O(1), io 1-2
     # vars: n = Git source 관측 행 수
     # basis: estimate
@@ -2614,6 +2735,15 @@ def repository_identity_lock_key(workspace_id: str, repo_ref: str) -> int:
 
 def workspace_credential_lock_key(workspace_id: str, provider: str, scope: str) -> int:
     raw = f"workspace-credential\0{workspace_id}\0{provider}\0{scope}".encode()
+    return int.from_bytes(hashlib.sha256(raw).digest()[:8], byteorder="big", signed=True)
+
+
+def argo_observation_lock_key(
+    workspace_id: str, binding_id: str, correlation_id: str, expected_sha: str
+) -> int:
+    raw = (
+        f"argo-observation\0{workspace_id}\0{binding_id}\0{correlation_id}\0{expected_sha}".encode()
+    )
     return int.from_bytes(hashlib.sha256(raw).digest()[:8], byteorder="big", signed=True)
 
 
