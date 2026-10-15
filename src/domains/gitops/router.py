@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -25,7 +25,6 @@ from domains.rca.events import (
     RecoveryVerificationFailedBody,
 )
 from packages.config.constants import Target
-from packages.config.settings import env
 from packages.contracts.gateway import routes as gateway_routes
 from packages.contracts.gateway.requests import (
     DEFAULT_WEBHOOK_REPLICAS,
@@ -55,7 +54,6 @@ APPROVAL_ACCESS_DENIED = "approval access denied"
 APPROVAL_CONFLICT = "approval already resolved"
 HTTP_NOT_FOUND = 404
 HTTP_CONFLICT = 409
-GITOPS_WEBHOOK_IMAGE_ENV = "GITOPS_WEBHOOK_IMAGE"
 GITHUB_PUSH_EVENT = "push"
 GITHUB_PULL_REQUEST_EVENT = "pull_request"
 # App 이 자동 수신하는 수명주기 이벤트 — 외부(GitHub) 변경을 내부 상태로 반영해
@@ -249,12 +247,9 @@ def build_git_webhook_bodies(
     raw_change = github_raw_change(payload, event_name)
     if raw_change is None:
         return []
-    image = env(GITOPS_WEBHOOK_IMAGE_ENV, "")
-    if not image:
-        raise HTTPException(status_code=503, detail="gitops webhook image not configured")
     repo_ref, branch, commit_sha = raw_change
     matched = [
-        body_for_poll_target(target, commit_sha=commit_sha, image=image)
+        body_for_poll_target(target, commit_sha=commit_sha, image="")
         for target in targets
         if str(target.get("repo_ref") or "").lower() == repo_ref.lower()
         and str(target.get("branch") or "") == branch
@@ -611,19 +606,18 @@ async def handle_tracked_recovery_pull_request(
     pr = dict(lifecycle.get("pr") or {})
     approved_changes = approved_change_contract(record_payload)
     approved_replicas = approved_replica_count(record_payload)
-    image = env(GITOPS_WEBHOOK_IMAGE_ENV, "")
-    if not image or not identity["merge_commit_sha"] or approved_changes is None:
+    if not identity["merge_commit_sha"] or approved_changes is None:
         return await reject_tracked_recovery_pull_request(
             db=db,
             events=events,
             record=exact_record,
             reason_code="recovery_deploy_context_incomplete",
-            reason="merge commit 또는 GitOps webhook image가 없어 배포를 시작할 수 없습니다.",
+            reason="merge commit 또는 승인된 변경 정보가 없어 추적을 시작할 수 없습니다.",
         )
     body = body_for_poll_target(
         target,
         commit_sha=identity["merge_commit_sha"],
-        image=image,
+        image="",
         correlation_id=str(exact_record["correlation_id"]),
         replicas=approved_replicas or DEFAULT_WEBHOOK_REPLICAS,
         force=True,
