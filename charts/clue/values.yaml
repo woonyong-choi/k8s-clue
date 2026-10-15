@@ -54,6 +54,9 @@ scm:
     tokenSecretName: ""
     tokenSecretKey: token
 
+argocd:
+  serverUrl: ""
+
 service:
   type: ClusterIP
   port: 80

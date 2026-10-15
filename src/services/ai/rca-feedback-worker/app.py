@@ -7,7 +7,8 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 
-from domains.gitops.events import WorkflowRunCompletedBody, WorkflowRunFailedBody
+from domains.gitops.argo_observation import observe_argocd_for_git_change
+from domains.gitops.events import GitChangedBody, WorkflowRunCompletedBody, WorkflowRunFailedBody
 from domains.rca.events import (
     ClusterEvidenceReceivedBody,
     IncidentResolvedBody,
@@ -123,6 +124,11 @@ SAFE_PR_ROUTE = ActionRoutes().safe_pr
 GITHUB_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 
 planner = RecoveryPlanner()
+
+
+@app.on(GitChangedBody)
+async def on_git_changed(evt: GitChangedBody, ctx: EventContext[RecoveryPlanStore]) -> None:
+    await observe_argocd_for_git_change(evt, ctx)
 
 
 def verification_window_seconds() -> tuple[int, int]:

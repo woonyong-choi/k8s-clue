@@ -141,6 +141,10 @@ spec:
               value: {{ .Values.scm.repository | quote }}
             - name: SCM_BASE_BRANCH
               value: {{ .Values.scm.baseBranch | quote }}
+            {{- with .Values.argocd.serverUrl }}
+            - name: ARGOCD_SERVER_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.scm.github.apiBase }}
             - name: GITHUB_API_BASE
               value: {{ . | quote }}

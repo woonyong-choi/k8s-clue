@@ -272,3 +272,38 @@ class GitSourceObservation(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     observed_at: Mapped[Any] = created_at_column()
     updated_at: Mapped[Any] = updated_at_column()
+
+
+class ArgoApplicationObservation(Base):
+    __tablename__ = "argo_application_observations"
+    __table_args__ = (
+        Index(
+            "ix_argo_application_observations_incident",
+            "workspace_id",
+            "correlation_id",
+            "binding_id",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = text_column()
+    binding_id: Mapped[str] = text_column()
+    correlation_id: Mapped[str] = text_column()
+    expected_sha: Mapped[str] = text_column()
+    application: Mapped[str] = text_column()
+    project: Mapped[str] = text_column()
+    fingerprint: Mapped[str] = text_column()
+    status: Mapped[str] = text_column()
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sync_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operation_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sync_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operation_phase: Mapped[str | None] = mapped_column(Text, nullable=True)
+    health_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    condition_types: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciled_at: Mapped[Any | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    first_checked_at: Mapped[Any] = created_at_column()
+    last_checked_at: Mapped[Any] = updated_at_column()
+    request_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    response_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

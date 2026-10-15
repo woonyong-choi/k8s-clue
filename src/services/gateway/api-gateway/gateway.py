@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from settings import Settings
 
+from domains.gitops.argo_router import router as argocd_router
 from domains.gitops.repository_discovery_router import router as repository_discovery_router
 from domains.gitops.router import router as gitops_router
 from domains.identity.admin_router import router as identity_admin_router
@@ -352,6 +353,7 @@ class ApiGateway:
         app.include_router(identity_router)
         app.include_router(identity_admin_router)
         app.include_router(repository_discovery_router)
+        app.include_router(argocd_router)
         app.include_router(github_app_router)
         app.include_router(gitops_router)
         self._register_ingest_routes(app)
