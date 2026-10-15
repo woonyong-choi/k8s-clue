@@ -21,6 +21,8 @@
 
 사건 이력은 `GET /incidents/{correlation_id}/history`가 조회한다. 인증된 agent evidence 수신이 snapshot과 이력 ledger를 한 트랜잭션으로 기록하며, 이력은 UID가 있는 객체와 UID 없이 locator(종류·namespace·이름)로만 식별한 객체를 구분한다. 삭제는 증명된 namespace의 Pod 수집에서 빠진 경우에만 인정하고, 증명 없는 부재는 기록하지 않는다. 수집이 범위 한정이라 이력 전체는 항상 `partial`이다. 호출자에게 `inventory.read`·`evidence.read` 권한이 없는 출처는 결과에서 제외한다. 관측하지 못한 삭제 시각은 정확한 값이 아니라 마지막 관측과 다음 수집 사이의 상한으로만 표시한다.
 
+추적 중인 이미지 다운로드 사건은 같은 응답의 `deployment`에 병합 SHA, 해당 SHA·경로의 Git 이미지, Argo CD의 적용 보고, Deployment·ReplicaSet·Pod 증거 창을 따로 표시한다. 이 필드는 `rca.read`, `evidence.read`, `application.read`가 모두 허용된 클러스터에서만 반환한다. Argo CD의 적용 보고만으로 회복을 선언하지 않는다. 목표 이미지와 소유 관계가 맞는 Pod를 적용 이후 서로 다른 두 창에서 확인해야 회복으로 판정한다. 수집이 잘리거나 관측이 오래됐거나 외부 조회가 실패하면 `unknown`으로 남긴다. 이 판정은 첫 수직 절편인 단일 raw YAML Deployment의 이미지 다운로드 실패에 한정한다.
+
 Frontend route는 세 개다.
 
 - `/`: 제품 소개와 Golden Path 안내

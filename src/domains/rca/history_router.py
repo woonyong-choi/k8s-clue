@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from domains.identity.dependencies import require_cluster_access, require_session
+from domains.rca.deployment_history import project_deployment_tracking
 from domains.rca.history import (
     OBSERVATION_MAX_GAP_MS,
     assess_completeness,
@@ -109,6 +110,11 @@ async def get_incident_history(
         if events_authorized
         else []
     )
+    deployment = None
+    if events_authorized and _is_granted(
+        db, current, workspace_id, cluster_id, Permission.APPLICATION_READ
+    ):
+        deployment = await _deployment_tracking(db, workspace_id, cluster_id, correlation_id)
 
     observations = [
         observation
@@ -136,8 +142,66 @@ async def get_incident_history(
         events=events,
         resources=project_resources(events, coverage=completeness.coverage),
         evidence=tuple(_evidence_reference(row) for row in evidence_rows),
+        deployment=deployment,
         completeness=completeness,
         truncated=snapshot.truncated and not unavailable,
+    )
+
+
+# cost: time O(a + i), heap O(a + i), stack O(1), io 4
+# vars: a = 제한된 Argo 관측 행 수, i = 제한된 이미지 증거 창 수
+# basis: estimate
+async def _deployment_tracking(
+    db: Any, workspace_id: str, cluster_id: str, correlation_id: str
+) -> Any:
+    plan = await asyncio.to_thread(
+        db.get_recovery_plan_by_correlation, correlation_id, workspace_id
+    )
+    if not isinstance(plan, dict):
+        return None
+    payload = plan.get("payload")
+    target = payload.get("target") if isinstance(payload, dict) else None
+    if not isinstance(target, dict) or target.get("cluster_id") != cluster_id:
+        return None
+    lifecycle = payload.get("lifecycle") if isinstance(payload, dict) else None
+    merge = lifecycle.get("merge") if isinstance(lifecycle, dict) else None
+    if not isinstance(merge, dict):
+        return None
+    binding_id = str(merge.get("binding_id") or "")
+    commit_sha = str(merge.get("merge_commit_sha") or "")
+    request = merge.get("deployment_request")
+    manifest_path = str(request.get("manifest_path") or "") if isinstance(request, dict) else ""
+    if not binding_id or not commit_sha or not manifest_path:
+        return None
+    source, argo, image = await asyncio.gather(
+        asyncio.to_thread(
+            db.get_git_source_observation,
+            workspace_id,
+            binding_id,
+            commit_sha,
+            manifest_path,
+        ),
+        asyncio.to_thread(
+            db.list_argo_application_observations,
+            workspace_id,
+            correlation_id,
+            binding_id,
+        ),
+        asyncio.to_thread(
+            db.list_image_pull_observations,
+            workspace_id,
+            correlation_id,
+            binding_id,
+        ),
+    )
+    if source is not None and source.get("cluster_id") != cluster_id:
+        source = None
+    return project_deployment_tracking(
+        plan=plan,
+        git_source=source,
+        argo_observations=argo,
+        image_observations=image,
+        now=datetime.now(UTC),
     )
 
 

@@ -327,6 +327,22 @@ class _FakeDb:
         self.truncated = truncated
         self.report = report
         self.read_scope: Any = None
+        self.deployment_plan: dict[str, Any] | None = None
+        self.git_source: dict[str, Any] | None = None
+        self.argo_observations: list[dict[str, Any]] = []
+        self.image_observations: list[dict[str, Any]] = []
+
+    def get_recovery_plan_by_correlation(self, *_: Any) -> dict[str, Any] | None:
+        return self.deployment_plan
+
+    def get_git_source_observation(self, *_: Any) -> dict[str, Any] | None:
+        return self.git_source
+
+    def list_argo_application_observations(self, *_: Any) -> list[Any]:
+        return self.argo_observations
+
+    def list_image_pull_observations(self, *_: Any) -> list[Any]:
+        return self.image_observations
 
     def list_rca_report_records(self, workspace_id: str, **_: Any) -> list[dict[str, Any]]:
         return [self.report] if self.report else []
@@ -456,6 +472,93 @@ def test_evidence_references_are_hidden_without_evidence_read(
     assert response.json()["evidence"] == []
     assert "k-1" not in response.text and "e-1" not in response.text
     assert response.json()["completeness"]["reasons"] == ["source_unavailable"]
+
+
+def test_incident_history_tracks_merge_apply_and_two_pod_recovery_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _FakeDb(report=_report())
+    now = datetime.now(UTC)
+    sha = "a" * 40
+    db.deployment_plan = {
+        "payload": {
+            "target": {"cluster_id": CLUSTER},
+            "lifecycle": {
+                "merge": {
+                    "binding_id": "binding-1",
+                    "merge_commit_sha": sha,
+                    "merged_at": (now - timedelta(minutes=2)).isoformat(),
+                    "deployment_request": {"manifest_path": "deploy/game.yaml"},
+                }
+            },
+        }
+    }
+    db.git_source = {
+        "status": "observed",
+        "image": "game:v2",
+        "cluster_id": CLUSTER,
+        "observed_at": now,
+    }
+    client = _client(monkeypatch, db, ALL | {Permission.APPLICATION_READ})
+
+    def state() -> str:
+        response = client.get(f"/incidents/c-1/history?{_window_query()}")
+        assert response.status_code == 200
+        return response.json()["deployment"]["status"]
+
+    assert state() == "merged"
+    db.argo_observations = [{"expected_sha": sha, "status": "pending", "last_checked_at": now}]
+    assert state() == "deploy_pending"
+    db.argo_observations = [
+        {
+            "expected_sha": sha,
+            "status": "reported_applied",
+            "sync_revision": sha,
+            "last_checked_at": now,
+            "reconciled_at": now - timedelta(seconds=45),
+        }
+    ]
+    assert state() == "unknown"
+    image = {
+        "expected_sha": sha,
+        "expected_image": "game:v2",
+        "evidence_key": "window-1",
+        "observed_at": now - timedelta(seconds=30),
+        "status": "failing",
+        "reason": "image_pull_failure_persists",
+        "ready_pod_count": 0,
+        "consecutive_healthy_windows": 0,
+        "confirmed_recovered": False,
+    }
+    db.image_observations = [image]
+    assert state() == "deployed_symptom_persists"
+    first_healthy = {
+        **image,
+        "evidence_key": "window-2",
+        "observed_at": now - timedelta(seconds=20),
+        "status": "healthy",
+        "consecutive_healthy_windows": 1,
+    }
+    db.image_observations = [first_healthy, image]
+    assert state() == "verification_pending"
+    db.image_observations = [
+        {
+            **first_healthy,
+            "evidence_key": "window-3",
+            "observed_at": now - timedelta(seconds=10),
+            "consecutive_healthy_windows": 2,
+            "confirmed_recovered": True,
+        },
+        first_healthy,
+        image,
+    ]
+    assert state() == "recovered"
+    db.argo_observations[0]["reconciled_at"] = now - timedelta(seconds=15)
+    assert state() == "verification_pending"
+    db.argo_observations[0]["reconciled_at"] = now - timedelta(seconds=45)
+
+    hidden = _client(monkeypatch, db, ALL).get(f"/incidents/c-1/history?{_window_query()}")
+    assert hidden.json()["deployment"] is None
 
 
 def test_future_window_is_clamped_and_not_called_complete_for_unobserved_time(

@@ -26,6 +26,14 @@ INCIDENT_HISTORY_PATH = "/incidents/{correlation_id}/history"
 HistoryLifecycle = Literal["present", "deleted", "unobserved"]
 DeletedAtBound = Literal["observed", "gap_bounded"]
 CompletenessStatus = Literal["complete", "partial", "unavailable"]
+DeploymentStatus = Literal[
+    "merged",
+    "deploy_pending",
+    "verification_pending",
+    "deployed_symptom_persists",
+    "recovered",
+    "unknown",
+]
 CompletenessReason = Literal[
     "collection_gap",
     "retention_boundary",
@@ -93,6 +101,37 @@ class IncidentHistoryCompleteness(StrictModel):
         return self
 
 
+class IncidentDeploymentImageWindow(StrictModel):
+    evidence_key: str
+    observed_at: datetime
+    status: Literal["healthy", "failing", "unknown"]
+    reason: str
+    ready_pod_count: int
+    consecutive_healthy_windows: int
+    confirmed_recovered: bool
+
+
+class IncidentDeploymentTracking(StrictModel):
+    status: DeploymentStatus
+    reason: str
+    merge_commit_sha: str
+    merged_at: datetime
+    repo_ref: str | None = None
+    manifest_path: str | None = None
+    namespace: str | None = None
+    deployment_name: str | None = None
+    git_source_status: str | None = None
+    git_image: str | None = None
+    git_observed_at: datetime | None = None
+    argocd_status: str | None = None
+    argocd_project: str | None = None
+    argocd_application: str | None = None
+    argocd_revision: str | None = None
+    argocd_health: str | None = None
+    argocd_checked_at: datetime | None = None
+    image_windows: tuple[IncidentDeploymentImageWindow, ...] = ()
+
+
 class IncidentHistoryResponse(StrictModel):
     correlation_id: str = Field(min_length=1)
     cluster_id: str = Field(min_length=1)
@@ -100,6 +139,7 @@ class IncidentHistoryResponse(StrictModel):
     events: tuple[TimelineEvent, ...] = ()
     resources: tuple[IncidentHistoryResource, ...] = ()
     evidence: tuple[IncidentHistoryEvidence, ...] = ()
+    deployment: IncidentDeploymentTracking | None = None
     completeness: IncidentHistoryCompleteness
     truncated: bool = False
 

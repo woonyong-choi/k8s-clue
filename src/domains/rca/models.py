@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import BigInteger, Float, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import TIMESTAMP, BigInteger, Float, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -145,3 +145,42 @@ class RecoveryPlanRecord(Base):
     payload: Mapped[dict[str, Any]] = jsonb_column()
     created_at: Mapped[Any] = created_at_column()
     updated_at: Mapped[Any] = updated_at_column()
+
+
+class ImagePullObservation(Base):
+    __tablename__ = "image_pull_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "correlation_id",
+            "binding_id",
+            "expected_sha",
+            "evidence_key",
+            name="uq_image_pull_observation_window",
+        ),
+        Index(
+            "ix_image_pull_observation_incident",
+            "workspace_id",
+            "correlation_id",
+            "binding_id",
+            "observed_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = text_column()
+    correlation_id: Mapped[str] = text_column()
+    binding_id: Mapped[str] = text_column()
+    expected_sha: Mapped[str] = text_column()
+    expected_image: Mapped[str] = text_column()
+    evidence_key: Mapped[str] = text_column()
+    status: Mapped[str] = text_column()
+    reason: Mapped[str] = text_column()
+    deployment_uid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    replicaset_uid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ready_pod_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    consecutive_healthy_windows: Mapped[int] = mapped_column(Integer, nullable=False)
+    confirmed_recovered: Mapped[bool] = mapped_column(nullable=False)
+    observed_at: Mapped[Any] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    created_at: Mapped[Any] = created_at_column()

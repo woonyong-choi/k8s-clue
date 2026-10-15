@@ -173,8 +173,11 @@ def argo_credential_scope(binding_id: str) -> str:
 async def observe_argocd_for_git_change(
     event: GitChangedBody,
     context: EventContext[Any],
+    *,
+    correlation_id: str | None = None,
 ) -> None:
-    if not GIT_SHA.fullmatch(event.commit_sha) or not context.correlation_id:
+    incident_id = correlation_id or context.correlation_id
+    if not GIT_SHA.fullmatch(event.commit_sha) or not incident_id:
         raise ArgoObservationError("invalid_git_event")
     targets = await context.db.list_active_github_poll_targets(
         event.workspace_id, binding_id=event.binding_id
@@ -192,7 +195,7 @@ async def observe_argocd_for_git_change(
     payload: dict[str, Any] = {
         "workspace_id": event.workspace_id,
         "binding_id": event.binding_id,
-        "correlation_id": context.correlation_id,
+        "correlation_id": incident_id,
         "expected_sha": event.commit_sha,
         "project": project,
         "application": application,
