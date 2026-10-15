@@ -15,5 +15,5 @@ spec:
     spec:
       containers:
         - name: app
-          image: ghcr.io/woonyong-choi/clue-demo-nonexistent:v0.0.0-missing
+          image: busybox:1.37.0
           command: ["sh", "-c", "sleep 3600"]
