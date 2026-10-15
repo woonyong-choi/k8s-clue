@@ -1132,15 +1132,9 @@ class KubernetesSnapshotProvider:
             controller_revision_payload, telemetry_query.label_selector
         )
         raw_workloads = {
-            K8S_KIND_DEPLOYMENT: scoped_items(
-                deployment_payload, telemetry_query.label_selector
-            ),
-            "StatefulSet": scoped_items(
-                statefulset_payload, telemetry_query.label_selector
-            ),
-            "DaemonSet": scoped_items(
-                daemonset_payload, telemetry_query.label_selector
-            ),
+            K8S_KIND_DEPLOYMENT: scoped_items(deployment_payload, telemetry_query.label_selector),
+            "StatefulSet": scoped_items(statefulset_payload, telemetry_query.label_selector),
+            "DaemonSet": scoped_items(daemonset_payload, telemetry_query.label_selector),
             K8S_KIND_REPLICA_SET: active_replicasets(raw_replicasets),
             "Job": scoped_items(job_payload, telemetry_query.label_selector),
             "CronJob": scoped_items(cronjob_payload, telemetry_query.label_selector),
@@ -2473,7 +2467,14 @@ def pod_container_summaries(
         ports, ports_complete = container_port_observations(value)
         complete = complete and ports_complete
         status_summary = container_summary(statuses.get(name, {"name": name}))
-        result.append({**status_summary, "name": name, "ports": ports})
+        result.append(
+            {
+                **status_summary,
+                "name": name,
+                "declared_image": as_text(value.get("image")) or None,
+                "ports": ports,
+            }
+        )
 
     for name, value in statuses.items():
         if name in observed_names:

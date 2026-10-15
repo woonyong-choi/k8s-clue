@@ -74,6 +74,10 @@ def assess_image_pull_window(
         return ImagePullWindow(
             "failing", "image_pull_failure_persists", deployment_uid, replicaset_uid
         )
+    if any(not _pod_image_identity_present(item) for item in pods):
+        return ImagePullWindow(
+            "unknown", "pod_image_identity_missing", deployment_uid, replicaset_uid
+        )
     ready_pods = tuple(
         sorted(str(item["uid"]) for item in pods if _pod_runs_image(item, expected_image))
     )
@@ -148,15 +152,28 @@ def _has_image_pull_failure(pod: Mapping[str, Any]) -> bool:
 
 def _pod_runs_image(pod: Mapping[str, Any], expected_image: str) -> bool:
     containers = pod.get("containers")
-    if not isinstance(containers, list):
-        return False
-    running = [
-        item
-        for item in containers
-        if isinstance(item, Mapping) and item.get("image") == expected_image
-    ]
-    return bool(running) and all(
-        item.get("ready") is True and item.get("state") == "running" for item in running
+    return (
+        isinstance(containers, list)
+        and bool(containers)
+        and all(
+            isinstance(item, Mapping)
+            and item.get("declared_image") == expected_image
+            and item.get("ready") is True
+            and item.get("state") == "running"
+            for item in containers
+        )
+    )
+
+
+def _pod_image_identity_present(pod: Mapping[str, Any]) -> bool:
+    containers = pod.get("containers")
+    return (
+        isinstance(containers, list)
+        and bool(containers)
+        and all(
+            isinstance(item, Mapping) and bool(_text(item.get("declared_image")))
+            for item in containers
+        )
     )
 
 

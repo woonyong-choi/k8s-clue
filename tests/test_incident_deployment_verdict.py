@@ -61,7 +61,15 @@ def _kubernetes() -> dict[str, Any]:
                 "uid": "pod-new",
                 "owner_uid": "rs-new",
                 "waiting_reasons": [],
-                "containers": [{"name": "game", "image": IMAGE, "ready": True, "state": "running"}],
+                "containers": [
+                    {
+                        "name": "game",
+                        "declared_image": IMAGE,
+                        "image": IMAGE,
+                        "ready": True,
+                        "state": "running",
+                    }
+                ],
             }
         ],
     }
@@ -75,6 +83,20 @@ def _assess(snapshot: dict[str, Any]) -> str:
 
 def test_image_pull_window_requires_target_replicaset_pod_to_run_expected_image() -> None:
     assert _assess(_kubernetes()) == "healthy"
+
+
+def test_image_pull_window_accepts_normalized_runtime_image() -> None:
+    snapshot = _kubernetes()
+    snapshot["pods"][0]["containers"][0]["image"] = "registry.example/game@sha256:" + "b" * 64
+
+    assert _assess(snapshot) == "healthy"
+
+
+def test_image_pull_window_without_declared_pod_image_is_unknown() -> None:
+    snapshot = _kubernetes()
+    snapshot["pods"][0]["containers"][0].pop("declared_image")
+
+    assert _assess(snapshot) == "unknown"
 
 
 @pytest.mark.parametrize(
